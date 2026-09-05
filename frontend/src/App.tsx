@@ -19,7 +19,7 @@ import { MenuCategoriesPage } from "./features/owner/pages/menu/MenuCategoriesPa
 import { MenuVariantsPage } from "./features/owner/pages/menu/MenuVariantsPage";
 import { TablesPage } from "./features/owner/pages/TablesPage";
 import { StaffPage } from "./features/owner/pages/StaffPage";
-import { OwnerSettingsPage } from "./features/owner/pages/OwnerSettingsPage";
+import { OwnerSettingsPage } from "./features/owner/OwnerLayout";
 import { ProfileSettingsPage } from "./features/owner/pages/settings/ProfileSettingsPage";
 import { CafeSettingsPage } from "./features/owner/pages/settings/CafeSettingsPage";
 import { TaxSettingsPage } from "./features/owner/pages/settings/TaxSettingsPage";

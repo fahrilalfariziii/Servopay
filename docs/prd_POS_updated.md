@@ -791,7 +791,7 @@ Bagian ini mengatur batasan teknis dan panduan desain yang harus dipatuhi tanpa 
 
 **Build:** `tsc -b && vite build` OK (61 modules, 426kB). Lint `oxlint` hanya warning `set-state-in-effect` di `CafeSettingsPage/TaxSettingsPage` (expected).
 
-## 9. Roadmap Fase 1 Backend (Deferred)
+## 9. Roadmap Fase 2 Backend (Deferred)
 
 1. **Backend & DB:** Postgres/Supabase 12 tabel PRD dengan `business_id` per entity + field baru `logo_url, tax_enabled, tax_bearer, service_charge, sound_enabled, opening_cash, qr_template, hpp, qr_config`, seed `biz-1`.
 2. **Auth Backend:** `password_hash` + JWT + hash bcrypt, `RequireAuth` terhubung backend, role `owner|kasir|barista` (mock `password` plain → hash).

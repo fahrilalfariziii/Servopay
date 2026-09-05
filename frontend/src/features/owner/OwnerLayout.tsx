@@ -14,3 +14,7 @@ export function OwnerLayout() {
     </div>
   )
 }
+
+export function OwnerSettingsPage() {
+  return <Outlet />
+}

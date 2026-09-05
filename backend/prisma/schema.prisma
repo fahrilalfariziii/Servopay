@@ -1,0 +1,235 @@
+// Schema ini mengikuti ERD 12-tabel di docs/prd_POS_updated.md (§6 Database Schema)
+// Semua tabel operasional punya business_id agar SaaS-ready di masa depan.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Business {
+  id                   Int      @id @default(autoincrement())
+  name                 String
+  tagline              String?
+  address              String?
+  phone                String?
+  email                String?
+  logoUrl              String?  @map("logo_url")
+  taxLabel             String   @default("PPN") @map("tax_label")
+  taxRate              Decimal  @default(0) @db.Decimal(6, 4) @map("tax_rate")
+  taxEnabled           Boolean  @default(false) @map("tax_enabled")
+  taxBearer            String   @default("customer") @map("tax_bearer") // customer | cafe
+  serviceChargeRate    Decimal  @default(0) @db.Decimal(6, 4) @map("service_charge_rate")
+  serviceChargeEnabled Boolean  @default(false) @map("service_charge_enabled")
+  soundEnabled         Boolean  @default(true) @map("sound_enabled")
+  openingCash          Decimal  @default(0) @db.Decimal(14, 2) @map("opening_cash")
+  qrTemplate           Json?    @map("qr_template")
+  status               String   @default("active")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  users          User[]
+  tables         CafeTable[]
+  categories     Category[]
+  products       Product[]
+  orders         Order[]
+  payments       Payment[]
+  ingredients    Ingredient[]
+  stockMovements StockMovement[]
+
+  @@map("businesses")
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  businessId   Int      @map("business_id")
+  business     Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         String // owner | kasir | barista
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  orders         Order[]
+  stockMovements StockMovement[]
+
+  @@map("users")
+}
+
+model CafeTable {
+  id          Int      @id @default(autoincrement())
+  businessId  Int      @map("business_id")
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  tableNumber String   @map("table_number")
+  qrToken     String   @unique @map("qr_token")
+  qrConfig    Json?    @map("qr_config")
+  isActive    Boolean  @default(true) @map("is_active")
+  area        String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  orders Order[]
+
+  @@map("tables")
+}
+
+model Category {
+  id         Int      @id @default(autoincrement())
+  businessId Int      @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name       String
+  sortOrder  Int      @default(0) @map("sort_order")
+  isActive   Boolean  @default(true) @map("is_active")
+
+  products Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id          Int      @id @default(autoincrement())
+  businessId  Int      @map("business_id")
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  categoryId  Int      @map("category_id")
+  category    Category @relation(fields: [categoryId], references: [id])
+  name        String
+  description String?
+  price       Decimal  @db.Decimal(14, 2)
+  hpp         Decimal? @db.Decimal(14, 2)
+  imageUrl    String?  @map("image_url")
+  isAvailable Boolean  @default(true) @map("is_available")
+  badge       String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  options    ProductOption[]
+  orderItems OrderItem[]
+
+  @@map("products")
+}
+
+model ProductOption {
+  id         Int     @id @default(autoincrement())
+  productId  Int     @map("product_id")
+  product    Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  name       String
+  type       String // temperature | sugar | ice | milk | addon
+  price      Decimal @default(0) @db.Decimal(14, 2)
+  isRequired Boolean @default(false) @map("is_required")
+  isActive   Boolean @default(true) @map("is_active")
+
+  @@map("product_options")
+}
+
+model Order {
+  id            Int       @id @default(autoincrement())
+  businessId    Int       @map("business_id")
+  business      Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  orderNumber   String    @unique @map("order_number")
+  clientOrderId String    @unique @map("client_order_id")
+  tableId       Int?      @map("table_id")
+  table         CafeTable? @relation(fields: [tableId], references: [id])
+  userId        Int?      @map("user_id")
+  user          User?     @relation(fields: [userId], references: [id])
+  customerName  String?   @map("customer_name")
+  source        String // self_order | pos
+  status        String    @default("diterima") // diterima | diproses | siap | selesai
+  paymentMethod String    @map("payment_method") // cash | qris
+  paymentStatus String    @default("pending") @map("payment_status") // pending | paid | failed
+  subtotal      Decimal   @db.Decimal(14, 2)
+  serviceCharge Decimal   @default(0) @map("service_charge") @db.Decimal(14, 2)
+  tax           Decimal   @default(0) @db.Decimal(14, 2)
+  taxLabel      String?   @map("tax_label")
+  taxBearer     String?   @map("tax_bearer")
+  total         Decimal   @db.Decimal(14, 2)
+  syncStatus    String    @default("synced") @map("sync_status") // pending | syncing | synced | failed
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  items      OrderItem[]
+  payments   Payment[]
+  statusLogs OrderStatusLog[]
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id           Int     @id @default(autoincrement())
+  orderId      Int     @map("order_id")
+  order        Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId    Int     @map("product_id")
+  product      Product @relation(fields: [productId], references: [id])
+  productName  String  @map("product_name")
+  price        Decimal @db.Decimal(14, 2)
+  quantity     Int
+  options      Json?
+  optionsLabel String? @map("options_label")
+  subtotal     Decimal @db.Decimal(14, 2)
+
+  @@map("order_items")
+}
+
+model Payment {
+  id         Int       @id @default(autoincrement())
+  businessId Int       @map("business_id")
+  business   Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  orderId    Int       @map("order_id")
+  order      Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  method     String // cash | qris
+  status     String // pending | paid | failed
+  amount     Decimal   @db.Decimal(14, 2)
+  gateway    String? // null untuk MVP (manual); midtrans/xendit di fase depan
+  reference  String?
+  paidAt     DateTime? @map("paid_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@map("payments")
+}
+
+model OrderStatusLog {
+  id        Int      @id @default(autoincrement())
+  orderId   Int      @map("order_id")
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status    String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("order_status_logs")
+}
+
+model Ingredient {
+  id           Int      @id @default(autoincrement())
+  businessId   Int      @map("business_id")
+  business     Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name         String
+  unit         String
+  currentStock Decimal  @default(0) @map("current_stock") @db.Decimal(14, 2)
+  minimumStock Decimal  @default(0) @map("minimum_stock") @db.Decimal(14, 2)
+  isAvailable  Boolean  @default(true) @map("is_available")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  movements StockMovement[]
+
+  @@map("ingredients")
+}
+
+model StockMovement {
+  id           Int        @id @default(autoincrement())
+  businessId   Int        @map("business_id")
+  business     Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  ingredientId Int        @map("ingredient_id")
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  type         String // in | out | adjustment | waste
+  quantity     Decimal    @db.Decimal(14, 2)
+  stockBefore  Decimal    @map("stock_before") @db.Decimal(14, 2)
+  stockAfter   Decimal    @map("stock_after") @db.Decimal(14, 2)
+  notes        String?
+  userId       Int?       @map("user_id")
+  user         User?      @relation(fields: [userId], references: [id])
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  @@map("stock_movements")
+}

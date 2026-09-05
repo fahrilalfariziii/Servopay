@@ -1,0 +1,31 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: servopay-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: servopay
+      POSTGRES_PASSWORD: servopay
+      POSTGRES_DB: servopay
+    ports:
+      - "5432:5432"
+    volumes:
+      - servopay_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U servopay -d servopay"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # GUI ringan untuk lihat isi database via browser (opsional, tapi berguna untuk testing tanpa frontend)
+  adminer:
+    image: adminer:latest
+    container_name: servopay-adminer
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    depends_on:
+      - db
+
+volumes:
+  servopay_db_data:
