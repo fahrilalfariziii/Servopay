@@ -1,6 +1,8 @@
 import { useState } from 'react'
+import { QRCodeCanvas, QRCodeSVG } from 'qrcode.react'
 import { useCafe } from '../../../mock/store'
 import { uid } from '../../../shared/lib/format'
+import { getSelfOrderUrl } from '../../../shared/lib/qr'
 import { Button, Field, TextInput } from '../../../shared/components/ui'
 import type { CafeTable, QrConfig } from '../../../shared/types'
 
@@ -74,17 +76,17 @@ export function TablesPage() {
     window.print()
   }
 
-  function openQrEditor(t: CafeTable) {
-    setQrDraft({
-      title: t.qrConfig?.title ?? '',
-      subtitle: t.qrConfig?.subtitle ?? '',
-      instruction: t.qrConfig?.instruction ?? '',
-      extraText: t.qrConfig?.extraText ?? '',
-      showLogo: t.qrConfig?.showLogo ?? true,
-      showTableNumber: t.qrConfig?.showTableNumber ?? true,
-      accentColor: t.qrConfig?.accentColor ?? '#000000',
-    })
-    setEditingQrTable(t)
+  // Unduh QR sebagai PNG (dari canvas tersembunyi di modal preview)
+  function handleDownloadQR(table: CafeTable) {
+    const canvas = document.getElementById(`qr-download-canvas-${table.id}`) as HTMLCanvasElement | null
+    if (!canvas) return
+    const pngUrl = canvas.toDataURL('image/png')
+    const a = document.createElement('a')
+    a.href = pngUrl
+    a.download = `qr-meja-${table.tableNumber}.png`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
   }
 
   function saveQrConfig() {
@@ -248,18 +250,12 @@ export function TablesPage() {
                 </button>
               </div>
 
-              {/* Visual Mini Grid Matrix */}
-              <div className="mb-4 flex items-center justify-center rounded-lg border border-sand bg-cream/40 p-4">
-                <div className="grid grid-cols-5 gap-1">
-                  {Array.from({ length: 25 }).map((_, i) => (
-                    <span
-                      key={i}
-                      className={`size-2.5 rounded-[1px] ${
-                        i % 2 === 0 ? (t.isActive ? 'bg-black' : 'bg-stone/40') : 'bg-white'
-                      }`}
-                    />
-                  ))}
+              {/* QR Mini Real (scan -> self-order meja ini) */}
+              <div className="mb-4 flex flex-col items-center justify-center gap-2 rounded-lg border border-sand bg-cream/40 p-4">
+                <div className={t.isActive ? '' : 'opacity-40 grayscale'}>
+                  <QRCodeSVG value={getSelfOrderUrl(t.qrToken)} size={72} level="M" bgColor="#ffffff" fgColor="#000000" />
                 </div>
+                {!t.isActive && <p className="text-[10px] font-semibold uppercase text-[#ba1a1a]">Meja nonaktif</p>}
               </div>
               {/* <p className="mb-4 truncate text-center text-xs text-stone">/order/{t.qrToken}</p> */}
             </div>
@@ -270,14 +266,6 @@ export function TablesPage() {
                 <span className="material-symbols-outlined text-[16px]">qr_code_2</span>
                 <span>Buka QR</span>
               </Button>
-              <button
-                type="button"
-                onClick={() => openQrEditor(t)}
-                className="flex size-9 items-center justify-center rounded-lg border border-clay/60 bg-white text-stone hover:border-black hover:text-black transition-colors"
-                title="Edit QR (kustom kata/logo)"
-              >
-                <span className="material-symbols-outlined text-[16px]">edit</span>
-              </button>
               <button
                 className="flex size-9 items-center justify-center rounded-lg border border-[#ba1a1a]/30 bg-white text-[#ba1a1a] hover:bg-[#ba1a1a]/10 transition-colors"
                 onClick={() => setDeletingTable(t)}
@@ -412,26 +400,39 @@ export function TablesPage() {
                   </div>
 
                   <div className="mx-auto flex size-44 items-center justify-center rounded-xl bg-white p-3 border-2 shadow-xs" style={{ borderColor: qrAccent }}>
-                    <svg className="size-full" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <rect width="100" height="100" fill="white" />
-                      <rect x="5" y="5" width="25" height="25" fill="black" />
-                      <rect x="9" y="9" width="17" height="17" fill="white" />
-                      <rect x="13" y="13" width="9" height="9" fill="black" />
-                      <rect x="70" y="5" width="25" height="25" fill="black" />
-                      <rect x="74" y="9" width="17" height="17" fill="white" />
-                      <rect x="78" y="13" width="9" height="9" fill="black" />
-                      <rect x="5" y="70" width="25" height="25" fill="black" />
-                      <rect x="9" y="74" width="17" height="17" fill="white" />
-                      <rect x="13" y="78" width="9" height="9" fill="black" />
-                      <rect x="35" y="10" width="10" height="10" fill="black" />
-                      <rect x="50" y="15" width="15" height="10" fill="black" />
-                      <rect x="35" y="35" width="30" height="30" fill="black" />
-                      <rect x="40" y="40" width="20" height="20" fill="white" />
-                      <rect x="45" y="45" width="10" height="10" fill="black" />
-                      <rect x="70" y="40" width="15" height="15" fill="black" />
-                      <rect x="40" y="70" width="25" height="10" fill="black" />
-                      <rect x="70" y="75" width="20" height="15" fill="black" />
-                    </svg>
+                    <QRCodeSVG
+                      value={getSelfOrderUrl(selectedQRTable.qrToken)}
+                      size={152}
+                      level="H"
+                      bgColor="#ffffff"
+                      fgColor="#000000"
+                      imageSettings={
+                        qrShowLogo && business.logoUrl
+                          ? { src: business.logoUrl, x: undefined, y: undefined, height: 36, width: 36, excavate: true }
+                          : undefined
+                      }
+                    />
+                  </div>
+                  {!selectedQRTable.isActive && (
+                    <p className="mt-1 rounded bg-[#ba1a1a]/10 px-2 py-1 text-[10px] font-bold uppercase text-[#ba1a1a]">
+                      Meja nonaktif — QR tidak akan membuka self-order
+                    </p>
+                  )}
+                  {/* Canvas tersembunyi untuk Download PNG */}
+                  <div className="hidden">
+                    <QRCodeCanvas
+                      id={`qr-download-canvas-${selectedQRTable.id}`}
+                      value={getSelfOrderUrl(selectedQRTable.qrToken)}
+                      size={512}
+                      level="H"
+                      bgColor="#ffffff"
+                      fgColor="#000000"
+                      imageSettings={
+                        qrShowLogo && business.logoUrl
+                          ? { src: business.logoUrl, x: undefined, y: undefined, height: 120, width: 120, excavate: true }
+                          : undefined
+                      }
+                    />
                   </div>
 
                   <div>
@@ -452,13 +453,13 @@ export function TablesPage() {
                   <Button variant="outline" className="flex-1" onClick={() => setSelectedQRTable(null)}>
                     Batal
                   </Button>
+                  <Button variant="outline" className="flex-1 flex items-center justify-center gap-2" onClick={() => selectedQRTable && handleDownloadQR(selectedQRTable)}>
+                    <span className="material-symbols-outlined text-[18px]">download</span>
+                    <span>Download</span>
+                  </Button>
                   <Button className="flex-1 flex items-center justify-center gap-2" onClick={handlePrintQR}>
                     <span className="material-symbols-outlined text-[18px]">print</span>
                     <span>Cetak QR</span>
-                  </Button>
-                  <Button variant="outline" className="flex-1" onClick={() => openQrEditor(selectedQRTable)}>
-                    <span className="material-symbols-outlined text-[16px]">edit</span>
-                    <span>Edit</span>
                   </Button>
                 </div>
               </div>
@@ -488,12 +489,8 @@ export function TablesPage() {
                     <p className="font-display text-sm font-bold uppercase" style={{ color: globalDraft.accentColor || '#000' }}>{globalDraft.title?.trim() || business.name}</p>
                     <p className="text-[10px] uppercase text-stone">{globalDraft.subtitle?.trim() || 'Indoor'}</p>
                   </div>
-                  <div className="mx-auto mt-2 size-20 rounded bg-white border p-1" style={{ borderColor: globalDraft.accentColor || '#000' }}>
-                    <div className="grid grid-cols-5 gap-0.5 h-full">
-                      {Array.from({ length: 25 }).map((_, i) => (
-                        <span key={i} className={`rounded-[1px] ${i % 2 === 0 ? 'bg-black' : 'bg-white'}`} />
-                      ))}
-                    </div>
+                  <div className="mx-auto mt-2 flex size-20 items-center justify-center rounded bg-white border p-1" style={{ borderColor: globalDraft.accentColor || '#000' }}>
+                    <QRCodeSVG value={getSelfOrderUrl('table-01')} size={72} level="M" bgColor="#ffffff" fgColor="#000000" />
                   </div>
                   {globalDraft.showTableNumber && <p className="mt-2 inline-block rounded px-2 py-0.5 text-[10px] font-bold text-white" style={{ background: globalDraft.accentColor || '#000' }}>MEJA XX</p>}
                   <p className="mt-1 text-[10px] font-bold uppercase" style={{ color: globalDraft.accentColor || '#000' }}>{globalDraft.instruction?.trim() || 'SCAN ME TO ORDER'}</p>
@@ -556,12 +553,19 @@ export function TablesPage() {
                     <p className="font-display text-sm font-bold uppercase" style={{ color: qrDraft.accentColor || '#000' }}>{qrDraft.title?.trim() || business.name}</p>
                     <p className="text-[10px] uppercase text-stone">{qrDraft.subtitle?.trim() || editingQrTable.area || 'Indoor'}</p>
                   </div>
-                  <div className="mx-auto mt-2 size-20 rounded bg-white border p-1" style={{ borderColor: qrDraft.accentColor || '#000' }}>
-                    <div className="grid grid-cols-5 gap-0.5 h-full">
-                      {Array.from({ length: 25 }).map((_, i) => (
-                        <span key={i} className={`rounded-[1px] ${i % 2 === 0 ? 'bg-black' : 'bg-white'}`} />
-                      ))}
-                    </div>
+                  <div className="mx-auto mt-2 flex size-20 items-center justify-center rounded bg-white border p-1" style={{ borderColor: qrDraft.accentColor || '#000' }}>
+                    <QRCodeSVG
+                      value={getSelfOrderUrl(editingQrTable.qrToken)}
+                      size={72}
+                      level="H"
+                      bgColor="#ffffff"
+                      fgColor="#000000"
+                      imageSettings={
+                        qrDraft.showLogo && business.logoUrl
+                          ? { src: business.logoUrl, x: undefined, y: undefined, height: 18, width: 18, excavate: true }
+                          : undefined
+                      }
+                    />
                   </div>
                   {qrDraft.showTableNumber && <p className="mt-2 inline-block rounded px-2 py-0.5 text-[10px] font-bold text-white" style={{ background: qrDraft.accentColor || '#000' }}>MEJA {editingQrTable.tableNumber}</p>}
                   <p className="mt-1 text-[10px] font-bold uppercase" style={{ color: qrDraft.accentColor || '#000' }}>{qrDraft.instruction?.trim() || 'SCAN ME TO ORDER'}</p>
