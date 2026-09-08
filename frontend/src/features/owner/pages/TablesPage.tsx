@@ -71,9 +71,56 @@ export function TablesPage() {
     setToggleTarget(null)
   }
 
-  // Fungsi Cetak QR Code
+  // Fungsi Cetak QR Code — hybrid: coba window baru (Opsi B, isolasi 1:1), fallback ke window.print biasa (Opsi A)
   function handlePrintQR() {
-    window.print()
+    const card = document.getElementById('printable-qr-card')
+    if (!card) {
+      window.print()
+      return
+    }
+    // Opsi B: buka window baru khusus cetak A4 polos — hasil 1:1 tanpa sisa layout BackOffice
+    const printWindow = window.open('', '_blank', 'width=800,height=600')
+    if (!printWindow) {
+      window.print()
+      return
+    }
+    const styles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+      .map((el) => el.outerHTML)
+      .join('\n')
+    printWindow.document.write(`
+      <!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Cetak QR Meja</title>
+          ${styles}
+          <style>
+            @page { size: A4; margin: 12mm; }
+            html, body { height: auto !important; overflow: visible !important; background: #fff !important; margin: 0 !important; }
+            body { display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+            #printable-qr-card {
+              width: 90mm !important; max-width: 90mm !important; margin: 0 auto !important;
+              padding: 6mm !important; background: #fff !important; box-shadow: none !important;
+              border-width: 2px !important; -webkit-print-color-adjust: exact; print-color-adjust: exact;
+            }
+            /* Hasil polos: paksa background cream jadi putih untuk hemat tinta */
+            #printable-qr-card.bg-cream, #printable-qr-card .bg-cream { background: #fff !important; }
+          </style>
+        </head>
+        <body>
+          ${card.outerHTML}
+        </body>
+      </html>
+    `)
+    printWindow.document.close()
+    // Tunggu SVG/QR render + font lalu print
+    const doPrint = () => {
+      printWindow.focus()
+      printWindow.print()
+      // Jangan close otomatis agar user masih bisa Save as PDF; tutup manual
+    }
+    if (printWindow.document.readyState === 'complete') setTimeout(doPrint, 300)
+    else printWindow.onload = () => setTimeout(doPrint, 300)
   }
 
   // Unduh QR sebagai PNG (dari canvas tersembunyi di modal preview)
@@ -159,25 +206,25 @@ export function TablesPage() {
 
   return (
     <div className="space-y-6 pb-12">
-      {/* CSS Khusus untuk Tampilan Print / Cetak QR Code */}
+      {/* CSS Cetak A4 Polos — Opsi A (fallback Ctrl+P tanpa window baru) */}
       <style>{`
         @media print {
-          body * {
-            visibility: hidden;
-          }
-          #printable-qr-card, #printable-qr-card * {
-            visibility: visible;
-          }
+          @page { size: A4; margin: 12mm; }
+          html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
+          /* Sembunyikan sidebar/header BackOffice agar tidak ganggu posisi QR */
+          aside, header, nav { display: none !important; }
+          body * { visibility: hidden; }
+          #printable-qr-card, #printable-qr-card * { visibility: visible; }
           #printable-qr-card {
             position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
+            left: 50%; top: 50%; transform: translate(-50%, -50%);
+            width: 90mm !important; max-width: 90mm !important;
+            margin: 0 auto !important; padding: 6mm !important;
+            display: block !important; box-shadow: none !important;
+            background: #fff !important; /* polos hemat tinta */
+            -webkit-print-color-adjust: exact; print-color-adjust: exact;
           }
+          #printable-qr-card.bg-cream, #printable-qr-card .bg-cream { background: #fff !important; }
         }
       `}</style>
 
