@@ -21,7 +21,7 @@ export function StaffPage() {
   })
 
   function isStrongPassword(p: string) {
-    return /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9]).{6,}$/.test(p)
+    return /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/.test(p)
   }
 
   // State Modal Konfirmasi Toggle Status Aktif / Nonaktif
@@ -55,7 +55,7 @@ export function StaffPage() {
       return
     }
     if (!formData.password || !isStrongPassword(formData.password)) {
-      setFormError('Password wajib min 6 karakter, harus ada huruf, angka, dan simbol (!@#$ etc).')
+      setFormError('Password wajib min 8 karakter, harus ada huruf, angka, dan simbol (!@#$ etc).')
       return
     }
 
@@ -244,7 +244,7 @@ export function StaffPage() {
                     <span className="material-symbols-outlined text-[18px]">{showPassword ? 'visibility_off' : 'visibility'}</span>
                   </button>
                 </div>
-                <p className="mt-1 text-[11px] text-stone">Wajib 6 karakter, kombinasi huruf + angka + simbol.</p>
+                <p className="mt-1 text-[11px] text-stone">Wajib 8 karakter, kombinasi huruf + angka + simbol.</p>
               </Field>
 
               {formError && (

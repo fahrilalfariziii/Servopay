@@ -240,7 +240,15 @@ export function verifyMidtransSignature(payload: {
     .createHash("sha512")
     .update(`${payload.order_id}${payload.status_code}${payload.gross_amount}${payload.serverKey}`)
     .digest("hex");
-  return expected === payload.signature_key;
+  const a = Buffer.from(expected, "hex");
+  let b: Buffer;
+  try {
+    b = Buffer.from(payload.signature_key, "hex");
+  } catch {
+    return false;
+  }
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
 }
 
 export async function getMidtransTransactionStatus(

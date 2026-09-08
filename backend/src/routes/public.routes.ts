@@ -1,4 +1,5 @@
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import crypto from "crypto";
 import { prisma } from "../lib/prisma";
@@ -8,6 +9,22 @@ import { createOrder } from "../services/order.service";
 import { buildMidtransItemDetails, createMidtransChargeForMethod, getMidtransTransactionStatus, verifyMidtransSignature } from "../services/midtrans.service";
 import { markOrderPaid } from "../services/order.service";
 import { emitOrderPaymentUpdate } from "../lib/socket";
+
+const publicOrderLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Terlalu banyak order, coba lagi sebentar" },
+});
+
+const midtransNotificationLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Terlalu banyak notifikasi" },
+});
 
 export const publicRouter = Router();
 
@@ -111,6 +128,7 @@ const createSelfOrderSchema = z.object({
 // POST /api/public/orders — checkout dari Self-Order pelanggan
 publicRouter.post(
   "/orders",
+  publicOrderLimiter,
   asyncHandler(async (req, res) => {
     const data = createSelfOrderSchema.parse(req.body);
 
@@ -184,11 +202,12 @@ publicRouter.get(
   })
 );
 
-// GET /api/public/orders/by-number/:orderNumber/status — poll Midtrans status (fallback webhook)
+// GET /api/public/orders/by-client/:clientOrderId/status — poll Midtrans status (fallback webhook)
+// Opsi A: lookup via clientOrderId UUID (tidak bisa ditebak) — orderNumber tetap untuk Midtrans order_id.
 publicRouter.get(
-  "/orders/by-number/:orderNumber/status",
+  "/orders/by-client/:clientOrderId/status",
   asyncHandler(async (req, res) => {
-    const order = await prisma.order.findUnique({ where: { orderNumber: req.params.orderNumber }, include: { payments: true } });
+    const order = await prisma.order.findUnique({ where: { clientOrderId: req.params.clientOrderId }, include: { payments: true } });
     if (!order) throw AppError.notFound("Order tidak ditemukan");
     const business = await prisma.business.findUnique({ where: { id: order.businessId } });
     if (!business) throw AppError.notFound("Bisnis tidak ditemukan");
@@ -212,7 +231,7 @@ publicRouter.get(
     // Auto-sync jika sudah settlement di Midtrans tapi lokal masih pending
     if ((txStatus === "settlement" || txStatus === "capture") && order.paymentStatus !== "paid") {
       try {
-        const updated = await markOrderPaid(business.id, order.id, { reference: (midtransStatus.transaction_id as string) || undefined });
+        const updated = await markOrderPaid(business.id, order.id, { reference: (midtransStatus.transaction_id as string) || undefined }, { allowNonCash: true });
         emitOrderPaymentUpdate(business.id, updated);
         return res.json({ order: updated, midtrans: midtransStatus });
       } catch {}
@@ -225,9 +244,33 @@ publicRouter.get(
   })
 );
 
+// Deprecated alias — tetap dukung orderNumber sequential untuk backward compat, tapi log warning
+publicRouter.get(
+  "/orders/by-number/:orderNumber/status",
+  asyncHandler(async (req, res) => {
+    console.warn("[deprecated] GET /by-number/:orderNumber/status dipakai, ganti ke /by-client/:clientOrderId/status");
+    const order = await prisma.order.findUnique({ where: { orderNumber: req.params.orderNumber }, include: { payments: true } });
+    if (!order) throw AppError.notFound("Order tidak ditemukan");
+    const business = await prisma.business.findUnique({ where: { id: order.businessId } });
+    if (!business) throw AppError.notFound("Bisnis tidak ditemukan");
+    const midtransStatus = await getMidtransTransactionStatus(business as unknown as Parameters<typeof getMidtransTransactionStatus>[0], order.orderNumber);
+    if (!midtransStatus) return res.json({ order, midtrans: null });
+    const txStatus = (midtransStatus.transaction_status as string) || "";
+    if ((txStatus === "settlement" || txStatus === "capture") && order.paymentStatus !== "paid") {
+      try {
+        const updated = await markOrderPaid(business.id, order.id, { reference: (midtransStatus.transaction_id as string) || undefined }, { allowNonCash: true });
+        emitOrderPaymentUpdate(business.id, updated);
+        return res.json({ order: updated, midtrans: midtransStatus });
+      } catch {}
+    }
+    res.json({ order, midtrans: midtransStatus });
+  })
+);
+
 // POST /api/public/midtrans/notification — webhook Midtrans (public, verify signature)
 publicRouter.post(
   "/midtrans/notification",
+  midtransNotificationLimiter,
   asyncHandler(async (req, res) => {
     const body = req.body as Record<string, unknown>;
     const orderId = String(body.order_id || "");
@@ -274,7 +317,7 @@ publicRouter.post(
 
     if (transactionStatus === "settlement" || transactionStatus === "capture") {
       if (order.paymentStatus !== "paid") {
-        const updated = await markOrderPaid(business.id, order.id, { reference: transactionId || paymentType });
+        const updated = await markOrderPaid(business.id, order.id, { reference: transactionId || paymentType }, { allowNonCash: true });
         // update gatewayData paid flag (merge, jangan overwrite qrUrl)
         await prisma.payment.updateMany({ where: { orderId: order.id }, data: { gatewayData: mergedGatewayData } });
         emitOrderPaymentUpdate(business.id, updated);

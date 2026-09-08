@@ -3,7 +3,7 @@ import { useCafe } from '../../../../mock/store'
 import { Button, Field, TextInput } from '../../../../shared/components/ui'
 
 function isStrongPassword(p: string) {
-  return /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9]).{6,}$/.test(p)
+  return /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/.test(p)
 }
 
 export function ProfileSettingsPage() {
@@ -32,7 +32,7 @@ export function ProfileSettingsPage() {
       return
     }
     if (!isStrongPassword(newPass)) {
-      setMsg({ type: 'error', text: 'Password baru min 6 karakter, harus ada huruf, angka, dan simbol.' })
+      setMsg({ type: 'error', text: 'Password baru min 8 karakter, harus ada huruf, angka, dan simbol.' })
       return
     }
     upsertStaff({ ...session.user, password: newPass })
@@ -79,7 +79,7 @@ export function ProfileSettingsPage() {
       <form onSubmit={handleChangePassword} className="max-w-2xl rounded-[16px] border border-[#c4c7c7] bg-white p-6 shadow-2xs space-y-4">
         <div className="border-b border-sand pb-3">
           <h2 className="font-bold text-black">Ubah Password</h2>
-          <p className="text-xs text-stone">Ganti password akun Anda sendiri. Min 6 karakter (huruf + angka + simbol).</p>
+          <p className="text-xs text-stone">Ganti password akun Anda sendiri. Min 8 karakter (huruf + angka + simbol).</p>
         </div>
 
         {msg && (

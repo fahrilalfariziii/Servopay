@@ -11,8 +11,8 @@ export function comparePassword(plain: string, hash: string): Promise<boolean> {
 }
 
 // Sama seperti aturan di frontend (StaffPage.tsx / ProfileSettingsPage.tsx):
-// minimal 6 karakter, mengandung huruf, angka, dan simbol.
-const STRONG_PASSWORD_REGEX = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9]).{6,}$/;
+// minimal 8 karakter, mengandung huruf, angka, dan simbol.
+const STRONG_PASSWORD_REGEX = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
 
 export function isStrongPassword(plain: string): boolean {
   return STRONG_PASSWORD_REGEX.test(plain);

@@ -1,17 +1,41 @@
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
+import cookieParser from "cookie-parser";
 import { apiRouter } from "./routes";
 import { errorHandler, notFoundHandler } from "./middleware/error-handler";
+
+function getCorsOrigins(): string[] {
+  const raw = process.env.CORS_ORIGIN;
+  if (!raw) {
+    if (process.env.NODE_ENV === "production") throw new Error("CORS_ORIGIN wajib di-set di production (.env)");
+    return ["http://localhost:5173"];
+  }
+  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+}
 
 export function createApp() {
   const app = express();
 
-  app.use(
-    cors({
-      origin: (process.env.CORS_ORIGIN || "*").split(","),
-      credentials: true,
-    })
-  );
+  // Security headers standar
+  app.use(helmet());
+  app.use(cookieParser());
+
+  // Public endpoints (tanpa credentials, boleh longgar) — dipasang sebelum auth
+  const publicOrigins = getCorsOrigins();
+  app.use("/api/public", cors({ origin: publicOrigins, credentials: false }));
+  // Auth & staff endpoints (butuh credentials, origin harus spesifik)
+  const authOrigins = getCorsOrigins();
+  app.use("/api/auth", cors({ origin: authOrigins, credentials: true }));
+  app.use("/api/business", cors({ origin: authOrigins, credentials: true }));
+  app.use("/api/staff", cors({ origin: authOrigins, credentials: true }));
+  app.use("/api/tables", cors({ origin: authOrigins, credentials: true }));
+  app.use("/api/categories", cors({ origin: authOrigins, credentials: true }));
+  app.use("/api/products", cors({ origin: authOrigins, credentials: true }));
+  app.use("/api/orders", cors({ origin: authOrigins, credentials: true }));
+  app.use("/api/ingredients", cors({ origin: authOrigins, credentials: true }));
+  app.use("/api/analytics", cors({ origin: authOrigins, credentials: true }));
+
   app.use(express.json());
 
   app.get("/health", (_req, res) => {

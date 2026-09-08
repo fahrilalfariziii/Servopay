@@ -2,24 +2,43 @@ import { NextFunction, Request, Response } from "express";
 import { verifyAuthToken } from "../lib/jwt";
 import { AppError } from "../lib/errors";
 import { AuthTokenPayload } from "../lib/jwt";
+import { prisma } from "../lib/prisma";
 
 /**
  * Wajib login (role apapun). Mengisi req.auth = { userId, businessId, role }.
+ * Setelah verifikasi JWT, cek DB: user masih active dan role masih sama — staff yang
+ * dinonaktifkan/didemote langsung kehilangan akses tanpa tunggu token 12h.
  */
-export function requireAuth(req: Request, _res: Response, next: NextFunction) {
+export async function requireAuth(req: Request, _res: Response, next: NextFunction) {
   const header = req.headers.authorization;
+  let token: string | undefined;
 
-  if (!header || !header.startsWith("Bearer ")) {
-    return next(AppError.unauthorized("Header Authorization Bearer <token> wajib diisi"));
+  if (header && header.startsWith("Bearer ")) {
+    token = header.slice("Bearer ".length).trim();
+  } else if ((req as unknown as { cookies?: Record<string, string> }).cookies?.token) {
+    token = (req as unknown as { cookies: Record<string, string> }).cookies.token;
   }
 
-  const token = header.slice("Bearer ".length);
+  if (!token) {
+    return next(AppError.unauthorized("Header Authorization Bearer <token> wajib diisi atau login via cookie"));
+  }
 
+  let payload: AuthTokenPayload;
   try {
-    req.auth = verifyAuthToken(token);
-    return next();
+    payload = verifyAuthToken(token);
   } catch {
     return next(AppError.unauthorized("Token tidak valid atau kadaluarsa"));
+  }
+
+  try {
+    const user = await prisma.user.findUnique({ where: { id: payload.userId } });
+    if (!user || !user.active) return next(AppError.unauthorized("Akun tidak aktif"));
+    if (user.role !== payload.role) return next(AppError.unauthorized("Role tidak lagi valid, silakan login ulang"));
+    if (user.businessId !== payload.businessId) return next(AppError.unauthorized("Akses bisnis tidak valid"));
+    req.auth = payload;
+    return next();
+  } catch (e) {
+    return next(e);
   }
 }
 

@@ -1,6 +1,7 @@
 import { Server as HttpServer } from "http";
 import { Server as SocketIOServer, Socket } from "socket.io";
 import { verifyAuthToken } from "./jwt";
+import { prisma } from "./prisma";
 
 let io: SocketIOServer | null = null;
 
@@ -14,19 +15,20 @@ let io: SocketIOServer | null = null;
  *   socket.emit("join", { businessId: 1, token: JWT });        // staff (Frontoffice/BackOffice)
  */
 export function initSocket(server: HttpServer): SocketIOServer {
+  const raw = process.env.CORS_ORIGIN;
+  const origins = raw ? raw.split(",").map((s) => s.trim()).filter(Boolean) : ["http://localhost:5173"];
   io = new SocketIOServer(server, {
     cors: {
-      origin: (process.env.CORS_ORIGIN || "*").split(","),
+      origin: origins,
       credentials: true,
     },
   });
 
   io.on("connection", (socket: Socket) => {
-    socket.on("join", (payload: { businessId?: number; token?: string }) => {
+    socket.on("join", async (payload: { businessId?: number; token?: string; qrToken?: string; tableToken?: string }) => {
       let businessId = payload?.businessId;
 
-      // Kalau staff mengirim JWT, validasi & pakai businessId dari token
-      // supaya tidak bisa asal join room bisnis lain.
+      // Staff: pakai businessId dari JWT, jangan percaya kiriman client
       if (payload?.token) {
         try {
           const decoded = verifyAuthToken(payload.token);
@@ -35,6 +37,19 @@ export function initSocket(server: HttpServer): SocketIOServer {
           socket.emit("join_error", { message: "Token tidak valid" });
           return;
         }
+      } else {
+        // Pelanggan self-order: wajib kirim qrToken meja, resolve businessId via DB (sama seperti GET /public/tables/:qrToken)
+        const qrToken = payload?.qrToken ?? payload?.tableToken;
+        if (!qrToken) {
+          socket.emit("join_error", { message: "qrToken wajib diisi untuk pelanggan" });
+          return;
+        }
+        const table = await prisma.cafeTable.findUnique({ where: { qrToken } });
+        if (!table || !table.isActive) {
+          socket.emit("join_error", { message: "QR meja tidak valid atau tidak aktif" });
+          return;
+        }
+        businessId = table.businessId;
       }
 
       if (!businessId) {

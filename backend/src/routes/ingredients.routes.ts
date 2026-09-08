@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { AppError } from "../lib/errors";
 import { asyncHandler } from "../middleware/error-handler";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, requireRole } from "../middleware/auth";
 import { emitStockUpdate } from "../lib/socket";
 
 export const ingredientsRouter = Router();
@@ -29,9 +29,10 @@ const ingredientSchema = z.object({
   isAvailable: z.boolean().optional(),
 });
 
-// POST /api/ingredients — tambah bahan baru
+// POST /api/ingredients — tambah bahan baru (owner only)
 ingredientsRouter.post(
   "/",
+  requireRole("owner"),
   asyncHandler(async (req, res) => {
     const data = ingredientSchema.parse(req.body);
     const created = await prisma.ingredient.create({
@@ -41,9 +42,10 @@ ingredientsRouter.post(
   })
 );
 
-// PUT /api/ingredients/:id — edit info bahan (bukan stok — pakai /movements untuk stok)
+// PUT /api/ingredients/:id — edit info bahan (owner only)
 ingredientsRouter.put(
   "/:id",
+  requireRole("owner"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const data = ingredientSchema.partial().omit({ currentStock: true }).parse(req.body);
@@ -56,9 +58,10 @@ ingredientsRouter.put(
   })
 );
 
-// DELETE /api/ingredients/:id — nonaktifkan (soft delete)
+// DELETE /api/ingredients/:id — nonaktifkan (owner only)
 ingredientsRouter.delete(
   "/:id",
+  requireRole("owner"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.ingredient.findFirst({ where: { id, businessId: req.auth!.businessId } });
@@ -95,6 +98,10 @@ ingredientsRouter.post(
   asyncHandler(async (req, res) => {
     const ingredientId = Number(req.params.id);
     const data = movementSchema.parse(req.body);
+    // adjustment rawan disalahgunakan untuk menutupi kehilangan stok — batasi owner only
+    if (data.type === "adjustment" && req.auth!.role !== "owner") {
+      throw AppError.forbidden("Adjustment stok hanya boleh dilakukan owner");
+    }
 
     const ingredient = await prisma.ingredient.findFirst({
       where: { id: ingredientId, businessId: req.auth!.businessId },

@@ -1,0 +1,47 @@
+list perbaikan:
+Cek user aktif di setiap request (bukan cuma percaya isi token)
+Di middleware/auth.ts, fungsi requireAuth: setelah verifyAuthToken berhasil, tambahkan query ke tabel User berdasarkan userId dari token, pastikan active === true dan role di DB masih sama dengan role di token. Kalau tidak, tolak dengan 401. Efeknya: staff yang dinonaktifkan/di-demote owner langsung kehilangan akses, tidak perlu tunggu token expired 12 jam.
+
+Hapus fallback default untuk kunci enkripsi Midtrans
+Di lib/encryption.ts, fungsi getKey(): hapus bagian || "default-dev-32-char-secret-please-change". Ubah supaya kalau MIDTRANS_KEY_ENCRYPTION_SECRET kosong, langsung throw Error saat file ini pertama kali dipakai (sama seperti pola yang sudah dipakai di jwt.ts untuk JWT_SECRET). Jangan biarkan aplikasi jalan diam-diam dengan kunci default.
+
+Ganti sistem nomor order publik jadi tidak bisa ditebak
+Di public.routes.ts, endpoint GET /orders/by-number/:orderNumber/status: jangan andalkan orderNumber yang sequential (BB-9023, dst) sebagai satu-satunya kunci pencarian yang bisa diakses publik.
+Opsi paling sederhana: ganti parameter endpoint ini jadi pakai clientOrderId (UUID, sudah ada di skema) alih-alih orderNumber. orderNumber tetap dipakai untuk keperluan internal/struk, tapi bukan untuk lookup publik.
+Kalau orderNumber tetap ingin dipakai untuk lookup publik, tambahkan kolom token acak terpisah per order khusus untuk keperluan polling, dan wajibkan token itu di query, bukan hanya nomor urut.
+
+Batasi endpoint join Socket.io
+Di lib/socket.ts, event "join": untuk kasus tanpa token (self-order/pelanggan), jangan terima businessId mentah dari client begitu saja.
+Ganti jadi wajib kirim qrToken meja. Di server, sebelum socket.join(...), query dulu CafeTable berdasarkan qrToken tersebut untuk resolve businessId yang valid — sama seperti pola yang sudah dipakai di public.routes.ts untuk endpoint GET /public/tables/:qrToken. Kalau qrToken tidak ditemukan/tidak aktif, tolak join.
+
+Batasi endpoint tandai lunas manual
+Di orders.routes.ts, route PATCH /:id/pay: tambahkan requireRole("owner", "kasir") (keluarkan barista dari daftar yang boleh).
+Tambahan logika di order.service.ts fungsi markOrderPaid: kalau order.paymentMethod bukan "cash" (artinya harusnya lewat Midtrans), jangan izinkan pelunasan manual lewat endpoint ini sama sekali — arahkan supaya status pembayaran hanya bisa berubah lewat webhook Midtrans (/public/midtrans/notification) atau endpoint polling status yang sudah ada. Boleh dikasih pesan error yang jelas kalau ada yang coba.
+
+Samakan aturan role di endpoint ingredients
+Di ingredients.routes.ts: tambahkan requireRole("owner") untuk route POST /, PUT /:id, dan DELETE /:id (data master bahan) — samakan pola dengan categories.routes.ts/products.routes.ts.
+Route POST /:id/movements (catat stok masuk/keluar) boleh tetap terbuka untuk semua staff kalau memang itu maksudnya (kasir/barista wajar mencatat stok harian), tapi pertimbangkan apakah type: "adjustment" (yang bisa naik/turun bebas) sebaiknya dibatasi owner saja, karena ini rawan disalahgunakan untuk menutupi kehilangan stok.
+
+Perbaiki konfigurasi CORS
+Di app.ts: jangan gunakan "*" sebagai default CORS_ORIGIN yang dibungkus jadi array. Tentukan default yang eksplisit (misalnya origin frontend production/staging), dan wajibkan CORS_ORIGIN diisi manual di .env untuk tiap environment — jangan andalkan default sama sekali untuk production.
+Kalau memang perlu wildcard untuk endpoint publik tertentu (misalnya /api/public/* yang dipanggil dari HP pelanggan lewat QR), pertimbangkan pisahkan: endpoint publik boleh CORS longgar tanpa credentials, sedangkan endpoint yang butuh login (/api/auth, /api/business, dst.) harus CORS ketat dengan origin spesifik.
+
+Tambahkan rate limiting
+Pasang middleware rate-limit (banyak pilihan library, cukup cari yang umum dipakai Express) minimal di:
+POST /api/auth/login — cegah brute force password.
+POST /api/public/midtrans/notification dan endpoint /api/public/* lainnya — cegah spam/flood.
+
+Tambahkan security headers
+Pasang middleware header keamanan standar (yang mengatur header seperti X-Content-Type-Options, X-Frame-Options, dll.) di app.ts, dipasang sebelum route lain didaftarkan.
+
+Ganti perbandingan signature Midtrans jadi constant-time
+Di midtrans.service.ts, fungsi verifyMidtransSignature: ganti expected === payload.signature_key dengan fungsi compare yang tahan timing-attack (constant-time comparison), bukan === biasa. Pastikan kedua nilai dikonversi ke buffer dengan panjang yang sama dulu sebelum dibandingkan (SHA-512 hex selalu 128 karakter jadi aman untuk itu, tapi tetap cek panjang sebelum compare untuk hindari error).
+
+Naikkan standar minimal password
+Di lib/password.ts, STRONG_PASSWORD_REGEX: naikkan minimal panjang dari 6 ke 8–10 karakter. Update juga pesan error terkait dan teks di frontend (StaffPage.tsx, ProfileSettingsPage.tsx, LoginPage.tsx) supaya konsisten.
+
+Rate limit khusus endpoint order publik (bukan cuma login)
+Selain /api/auth/login, tambahkan rate limiter khusus di POST /api/public/orders (self-order checkout) dan POST /api/public/midtrans/notification. Endpoint order publik ini paling rawan di-spam script karena tidak butuh login sama sekali — beda kebutuhan limitnya dengan login (limit per-IP untuk order, limit per-email/IP untuk login).
+
+Rencanakan penyimpanan token bukan di localStorage/sessionStorage
+Begini nanti pas integrasi ini yang harus diputuskan dari awal: kalau backend bisa diatur untuk set JWT lewat httpOnly cookie, itu lebih tahan XSS dibanding disimpan di localStorage (yang bisa dibaca skrip apapun kalau ada celah XSS di frontend). Ini bukan bug sekarang, tapi keputusan desain yang lebih murah diputuskan sekarang daripada dibongkar ulang nanti.

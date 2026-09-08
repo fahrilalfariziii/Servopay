@@ -4,7 +4,7 @@ import crypto from "crypto";
 import { prisma } from "../lib/prisma";
 import { AppError } from "../lib/errors";
 import { asyncHandler } from "../middleware/error-handler";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, requireRole } from "../middleware/auth";
 import { createOrder, updateOrderStatus, markOrderPaid } from "../services/order.service";
 
 export const ordersRouter = Router();
@@ -140,9 +140,10 @@ const paySchema = z.object({
   reference: z.string().optional(),
 });
 
-// PATCH /api/orders/:id/pay — kasir verifikasi/mencatat pembayaran lunas
+// PATCH /api/orders/:id/pay — hanya owner/kasir; non-cash wajib lewat Midtrans webhook/polling
 ordersRouter.patch(
   "/:id/pay",
+  requireRole("owner", "kasir"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const data = paySchema.parse(req.body);

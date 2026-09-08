@@ -213,7 +213,8 @@ export async function updateOrderStatus(
 export async function markOrderPaid(
   businessId: number,
   orderId: number,
-  input: { method?: PaymentMethodInput; reference?: string }
+  input: { method?: PaymentMethodInput; reference?: string },
+  opts?: { allowNonCash?: boolean }
 ) {
   const order = await prisma.order.findFirst({
     where: { id: orderId, businessId },
@@ -222,6 +223,11 @@ export async function markOrderPaid(
   if (!order) throw AppError.notFound("Order tidak ditemukan");
   if (order.paymentStatus === "paid") {
     throw AppError.conflict("Order ini sudah lunas");
+  }
+  if (order.paymentMethod !== "cash" && !opts?.allowNonCash) {
+    throw AppError.badRequest(
+      "Pembayaran non-tunai (qris/ewallet/bank_transfer) hanya bisa dilunasi via Midtrans (webhook /public/midtrans/notification atau poll /public/orders/by-client/:clientOrderId/status), bukan manual."
+    );
   }
 
   const paidAt = new Date();

@@ -29,7 +29,7 @@ const createStaffSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
   password: z.string().refine(isStrongPassword, {
-    message: "Password minimal 6 karakter, mengandung huruf, angka, dan simbol",
+    message: "Password minimal 8 karakter, mengandung huruf, angka, dan simbol",
   }),
   role: z.enum(["owner", "kasir", "barista"]),
 });
@@ -62,7 +62,7 @@ const updateStaffSchema = z.object({
   password: z
     .string()
     .refine(isStrongPassword, {
-      message: "Password minimal 6 karakter, mengandung huruf, angka, dan simbol",
+      message: "Password minimal 8 karakter, mengandung huruf, angka, dan simbol",
     })
     .optional(),
 });

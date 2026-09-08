@@ -92,7 +92,7 @@ export function LoginPage() {
                 <span className="material-symbols-outlined text-[20px]">{showPassword ? 'visibility_off' : 'visibility'}</span>
               </button>
             </div>
-            <p className="mt-1 text-[11px] text-stone">Wajib 6 karakter (huruf + angka + simbol) untuk password baru di Staff.</p>
+            <p className="mt-1 text-[11px] text-stone">Wajib 8 karakter (huruf + angka + simbol) untuk password baru di Staff.</p>
           </Field>
         </div>
 

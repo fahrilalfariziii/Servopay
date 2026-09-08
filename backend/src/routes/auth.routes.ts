@@ -1,4 +1,5 @@
 import { Router } from "express";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { comparePassword } from "../lib/password";
@@ -14,10 +15,20 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Terlalu banyak percobaan login, coba lagi nanti" },
+  keyGenerator: (req) => `${ipKeyGenerator(req.ip as string)}-${String((req.body as { email?: string })?.email || "").toLowerCase()}`,
+});
+
 // POST /api/auth/login
 // Sama seperti frontend: tidak ada dropdown role, role otomatis terdeteksi dari user.
 authRouter.post(
   "/login",
+  loginLimiter,
   asyncHandler(async (req, res) => {
     const { email, password } = loginSchema.parse(req.body);
 
@@ -35,6 +46,15 @@ authRouter.post(
       userId: user.id,
       businessId: user.businessId,
       role: user.role as "owner" | "kasir" | "barista",
+    });
+
+    // Set httpOnly cookie (lebih tahan XSS daripada localStorage) + tetap return token untuk backward compat
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 12 * 60 * 60 * 1000,
+      path: "/",
     });
 
     res.json({
@@ -66,5 +86,14 @@ authRouter.get(
       active: user.active,
       businessId: user.businessId,
     });
+  })
+);
+
+// POST /api/auth/logout — hapus httpOnly cookie
+authRouter.post(
+  "/logout",
+  asyncHandler(async (_req, res) => {
+    res.clearCookie("token", { path: "/" });
+    res.json({ status: "ok" });
   })
 );
