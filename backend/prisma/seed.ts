@@ -9,6 +9,19 @@ async function hash(pw: string) {
 
 async function main() {
   console.log("Seeding database (data mengikuti frontend/src/mock/data.ts)...");
+  // Bersihkan data lama agar seed idempoten (urutan FK-aware)
+  await prisma.orderStatusLog.deleteMany();
+  await prisma.stockMovement.deleteMany();
+  await prisma.payment.deleteMany();
+  await prisma.orderItem.deleteMany();
+  await prisma.order.deleteMany();
+  await prisma.productOption.deleteMany();
+  await prisma.product.deleteMany();
+  await prisma.category.deleteMany();
+  await prisma.cafeTable.deleteMany();
+  await prisma.ingredient.deleteMany();
+  await prisma.user.deleteMany();
+  await prisma.business.deleteMany();
 
   // ---- Business ----
   const business = await prisma.business.create({
@@ -26,6 +39,15 @@ async function main() {
       serviceChargeRate: 5, // persen
       soundEnabled: true,
       openingCash: 0,
+      enabledPaymentMethods: ["cash", "qris", "ewallet", "bank_transfer"],
+      paymentSettings: {
+        cash: { instruction: "Bayar tunai di kasir", gateway: "manual" },
+        qris: { instruction: "QRIS dinamis Midtrans", gateway: "midtrans" },
+        ewallet: { instruction: "GoPay/ShopeePay Midtrans", gateway: "midtrans", channel: "gopay" },
+        bank_transfer: { instruction: "VA Midtrans", gateway: "midtrans", bank: "bca" },
+      },
+      midtransMode: "global",
+      midtransQrisAcquirer: null,
     },
   });
 

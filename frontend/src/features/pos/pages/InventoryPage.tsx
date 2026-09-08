@@ -142,8 +142,8 @@ export function InventoryPage() {
                 <tr>
                   <th className="px-4 py-3">Ingredient</th>
                   <th className="px-4 py-3">Current</th>
-                  <th className="px-4 py-3">Unit</th>
                   <th className="px-4 py-3">Minimum</th>
+                  <th className="px-4 py-3">Unit</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3 text-right">Aksi</th>
                 </tr>
@@ -156,8 +156,8 @@ export function InventoryPage() {
                     <tr key={i.id} className="border-t border-sand hover:bg-cream/40 transition-colors">
                       <td className="px-4 py-3 font-medium text-black">{i.name}</td>
                       <td className="px-4 py-3 font-semibold">{i.currentStock}</td>
-                      <td className="px-4 py-3 text-stone">{i.unit}</td>
                       <td className="px-4 py-3 text-stone">{i.minimumStock}</td>
+                      <td className="px-4 py-3 text-stone">{i.unit}</td>
                       <td className="px-4 py-3 font-semibold">
                         {oos ? (
                           <span className="text-[#ba1a1a]">Out of Stock</span>

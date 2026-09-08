@@ -17,11 +17,11 @@ interface Props {
   onCheckout: () => void;
 }
 
-const METHODS: { id: PaymentMethod; label: string; sub: string }[] = [
-  { id: "qris", label: "QRIS", sub: "GoPay, ShopeePay, Dana, dll" },
-  { id: "cash", label: "Tunai", sub: "Bayar di kasir" },
-  // { id: 'transfer', label: 'Transfer Bank', sub: 'Transfer ke rekening cafe' },
-  // { id: 'debit', label: 'Debit', sub: 'Kartu debit di kasir' },
+const ALL_METHODS: { id: PaymentMethod; label: string; sub: string }[] = [
+  { id: "cash", label: "Tunai", sub: "Bayar di Kasir" },
+  { id: "qris", label: "QRIS", sub: "Dana, ShopeePay, GoPay, dll" },
+  { id: "ewallet", label: "E-Wallet", sub: "GoPay, ShopeePay" },
+  { id: "bank_transfer", label: "Transfer Bank", sub: "BNI, BRI, BCA" },
 ];
 
 export function CartScreen({
@@ -37,6 +37,7 @@ export function CartScreen({
 }: Props) {
   const { business } = useCafe()
   const [error, setError] = useState(false);
+  const availableMethods = ALL_METHODS.filter((m) => (business.enabledPaymentMethods ?? ['cash','qris']).includes(m.id))
   const subtotal = cart.reduce((s, i) => s + i.price * i.quantity, 0);
   const serviceCharge = cart.length > 0 && business.serviceChargeEnabled ? Math.round(subtotal * (business.serviceChargeRate / 100)) : 0
   const taxBase = subtotal + serviceCharge
@@ -175,7 +176,10 @@ export function CartScreen({
               Metode Pembayaran
             </h2>
             <div className="flex flex-col gap-2">
-              {METHODS.map((m) => (
+              {availableMethods.length === 0 ? (
+                <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-medium text-[#ba1a1a]">Metode pembayaran belum dikonfigurasi. Hubungi kasir.</p>
+              ) : availableMethods.map((m) => {
+                return (
                 <button
                   key={m.id}
                   onClick={() => onPayMethod(m.id)}
@@ -183,17 +187,17 @@ export function CartScreen({
                     payMethod === m.id ? "border-sage" : "border-clay"
                   }`}
                 >
-                  <div>
+                  <div className="flex-1 pr-2">
                     <p className="text-sm font-bold">{m.label}</p>
                     <p className="text-[10px] text-soil">{m.sub}</p>
                   </div>
                   {payMethod === m.id && (
-                    <span className="flex size-5 items-center justify-center rounded-full bg-sage text-[10px] text-white">
+                    <span className="flex size-5 items-center justify-center rounded-full bg-sage text-[10px] text-white shrink-0">
                       ✓
                     </span>
                   )}
                 </button>
-              ))}
+              )})}
             </div>
           </section>
           <section className="rounded-[12px] bg-[#f3f3f3] p-5">
@@ -238,7 +242,7 @@ export function CartScreen({
       </div>
       <Button
         className="h-12 rounded-full px-8 disabled:opacity-50"
-        disabled={cart.length === 0 || !customerName.trim()}
+        disabled={cart.length === 0 || !customerName.trim() || availableMethods.length === 0}
         onClick={handleCheckout}
       >
         Pesan Sekarang

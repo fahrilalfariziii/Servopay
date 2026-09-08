@@ -23,6 +23,7 @@ import { OwnerSettingsPage } from "./features/owner/OwnerLayout";
 import { ProfileSettingsPage } from "./features/owner/pages/settings/ProfileSettingsPage";
 import { CafeSettingsPage } from "./features/owner/pages/settings/CafeSettingsPage";
 import { TaxSettingsPage } from "./features/owner/pages/settings/TaxSettingsPage";
+import { PaymentSettingsPage } from "./features/owner/pages/settings/PaymentSettingsPage";
 
 function RootRedirect() {
   const { session } = useCafe();
@@ -93,6 +94,7 @@ export default function App() {
               <Route path="profile" element={<ProfileSettingsPage />} />
               <Route path="business" element={<CafeSettingsPage />} />
               <Route path="tax" element={<TaxSettingsPage />} />
+              <Route path="payment" element={<PaymentSettingsPage />} />
               <Route path="cafe" element={<Navigate to="business" replace />} />
             </Route>
           </Route>

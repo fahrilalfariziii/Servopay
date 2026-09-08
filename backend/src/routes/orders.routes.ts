@@ -55,7 +55,7 @@ const createManualOrderSchema = z.object({
   clientOrderId: z.string().min(1).optional(),
   tableId: z.number().int().optional().nullable(),
   customerName: z.string().optional(),
-  paymentMethod: z.enum(["cash", "qris"]),
+  paymentMethod: z.enum(["cash", "qris", "ewallet", "bank_transfer"]),
   items: z
     .array(
       z.object({
@@ -84,6 +84,40 @@ ordersRouter.post(
       items: data.items,
     });
 
+    // Sama seperti public, coba trigger Midtrans jika gateway=midtrans
+    if ((data.paymentMethod as string) !== "cash") {
+      try {
+        const business = await prisma.business.findUnique({ where: { id: req.auth!.businessId } });
+        const settings = (business?.paymentSettings as Record<string, { gateway?: string }>) ?? {};
+        const methodGateway = settings[data.paymentMethod]?.gateway;
+        const shouldUseMidtrans = methodGateway === "midtrans" || (methodGateway === undefined && (data.paymentMethod as string) !== "cash");
+        if (shouldUseMidtrans && business) {
+          const { buildMidtransItemDetails, createMidtransChargeForMethod } = await import("../services/midtrans.service");
+          const charge = await createMidtransChargeForMethod({
+            business: business as unknown as Parameters<typeof createMidtransChargeForMethod>[0]["business"],
+            method: data.paymentMethod as "qris" | "ewallet" | "bank_transfer",
+            orderNumber: order.orderNumber,
+            grossAmount: Number(order.total),
+            customerName: data.customerName ?? undefined,
+            paymentSettings: (business.paymentSettings as Record<string, { acquirer?: string; bank?: string; channel?: string; wallets?: string[] }>) ?? {},
+            itemDetails: buildMidtransItemDetails({
+              items: order.items.map((i) => ({ productId: i.productId, productName: i.productName, price: i.price, quantity: i.quantity, optionsLabel: i.optionsLabel })),
+              serviceCharge: order.serviceCharge,
+              tax: order.tax,
+              taxLabel: order.taxLabel,
+            }),
+          });
+          if (charge) {
+            await prisma.payment.updateMany({ where: { orderId: order.id }, data: { gateway: "midtrans", reference: charge.transactionId, gatewayData: charge as unknown as object } });
+            const refreshed = await prisma.order.findUnique({ where: { id: order.id }, include: { items: true, payments: true, statusLogs: true, table: true } });
+            if (refreshed) return res.status(201).json(refreshed);
+          }
+        }
+      } catch (e) {
+        console.error("[Midtrans manual charge] gagal:", e);
+      }
+    }
+
     res.status(201).json(order);
   })
 );
@@ -102,7 +136,7 @@ ordersRouter.patch(
 );
 
 const paySchema = z.object({
-  method: z.enum(["cash", "qris"]).optional(),
+  method: z.enum(["cash", "qris", "ewallet", "bank_transfer"]).optional(),
   reference: z.string().optional(),
 });
 

@@ -27,6 +27,12 @@ model Business {
   soundEnabled         Boolean  @default(true) @map("sound_enabled")
   openingCash          Decimal  @default(0) @db.Decimal(14, 2) @map("opening_cash")
   qrTemplate           Json?    @map("qr_template")
+  enabledPaymentMethods Json     @default("[\"cash\", \"qris\"]") @map("enabled_payment_methods")
+  paymentSettings       Json?    @default("{}") @map("payment_settings")
+  midtransMode          String   @default("global") @map("midtrans_mode") // global | custom
+  midtransServerKeyEnc  String?  @map("midtrans_server_key_enc")
+  midtransClientKey     String?  @map("midtrans_client_key")
+  midtransQrisAcquirer  String?  @map("midtrans_qris_acquirer") // gopay | airpay_shopee
   status               String   @default("active")
   createdAt            DateTime @default(now()) @map("created_at")
   updatedAt            DateTime @updatedAt @map("updated_at")
@@ -137,7 +143,7 @@ model Order {
   customerName  String?   @map("customer_name")
   source        String // self_order | pos
   status        String    @default("diterima") // diterima | diproses | siap | selesai
-  paymentMethod String    @map("payment_method") // cash | qris
+  paymentMethod String    @map("payment_method") // cash | qris | ewallet | bank_transfer
   paymentStatus String    @default("pending") @map("payment_status") // pending | paid | failed
   subtotal      Decimal   @db.Decimal(14, 2)
   serviceCharge Decimal   @default(0) @map("service_charge") @db.Decimal(14, 2)
@@ -178,13 +184,14 @@ model Payment {
   business   Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
   orderId    Int       @map("order_id")
   order      Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  method     String // cash | qris
+  method     String // cash | qris | ewallet | bank_transfer
   status     String // pending | paid | failed
   amount     Decimal   @db.Decimal(14, 2)
-  gateway    String? // null untuk MVP (manual); midtrans/xendit di fase depan
-  reference  String?
-  paidAt     DateTime? @map("paid_at")
-  createdAt  DateTime  @default(now()) @map("created_at")
+  gateway     String? // manual | midtrans
+  reference   String?
+  gatewayData Json?   @map("gateway_data") // qrUrl, vaNumber, deeplink, raw response
+  paidAt      DateTime? @map("paid_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
 
   @@map("payments")
 }

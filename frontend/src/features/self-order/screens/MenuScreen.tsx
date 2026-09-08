@@ -1,7 +1,7 @@
 import { IMG } from "../../../mock/data";
 import { useCafe } from "../../../mock/store";
 import type { CartItem, Product } from "../../../shared/types";
-import { formatCompact, formatRupiah } from "../../../shared/lib/format";
+import { formatRupiah } from "../../../shared/lib/format";
 import {
   IconCart,
   IconPlus,
@@ -57,9 +57,17 @@ export function MenuScreen({
         />
         <div className="absolute inset-0 bg-black/50" />
         <div className="relative flex flex-col items-center gap-3 px-5 py-6">
-          <div className="flex size-16 items-center justify-center rounded-full bg-[#2f3e2a] font-display text-xl text-leaf">
-            B
-          </div>
+          {business.logoUrl ? (
+            <img
+              src={business.logoUrl}
+              alt={business.name}
+              className="size-16 rounded-full border border-white/30 bg-[#2f3e2a] object-cover"
+            />
+          ) : (
+            <div className="flex size-16 items-center justify-center rounded-full bg-[#2f3e2a] font-display text-xl text-leaf">
+              {(business.name || 'B').charAt(0).toUpperCase()}
+            </div>
+          )}
           <div className="text-center">
             <p className="font-display text-2xl font-bold text-white">
               {business.name}
@@ -141,7 +149,7 @@ export function MenuScreen({
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-semibold">
-                        {formatCompact(item.price)}
+                        {formatRupiah(item.price)}
                       </span>
                       {item.isAvailable && (
                         <button

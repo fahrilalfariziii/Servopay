@@ -60,7 +60,7 @@ export function CatalogPage() {
       </div>
 
       {/* Grid Katalog Produk */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
         {filtered.map((p) => (
           <article key={p.id} className="flex gap-4 rounded-[12px] border border-[#c4c7c7] bg-cream p-4 items-center">
             <img src={p.imageUrl} alt="" className="size-20 rounded-lg object-cover" />

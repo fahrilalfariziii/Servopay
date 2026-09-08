@@ -22,7 +22,8 @@ export function ManualOrderPage() {
   const [isPayModalOpen, setIsPayModalOpen] = useState(false)
   const [customerName, setCustomerName] = useState('')
   const [tableId, setTableId] = useState('')
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'qris'>('cash')
+  const enabledMethods = (business.enabledPaymentMethods as ('cash' | 'qris' | 'ewallet' | 'bank_transfer')[]) ?? ['cash', 'qris']
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'qris' | 'ewallet' | 'bank_transfer'>((enabledMethods[0] as 'cash' | 'qris' | 'ewallet' | 'bank_transfer') ?? 'cash')
   const [cashAmount, setCashAmount] = useState('')
 
   const tabs = ['All', ...categories.map((c) => c.name)]
@@ -169,7 +170,7 @@ export function ManualOrderPage() {
         </div>
 
         {/* Grid Katalog Produk */}
-        <div className="grid grid-cols-2 gap-3 overflow-auto pr-1 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 overflow-auto pr-1 xl:grid-cols-5">
           {list.map((p) => (
             <button
               key={p.id}
@@ -368,25 +369,26 @@ export function ManualOrderPage() {
                 </select>
               </div>
 
-              {/* Metode Pembayaran */}
+                {/* Metode Pembayaran */}
               <div>
                 <label className="mb-1 block text-xs font-semibold uppercase text-stone">Metode Pembayaran</label>
                 <div className="grid grid-cols-2 gap-2">
-                  {(['cash', 'qris'] as const).map((method) => (
+                  {enabledMethods.map((method) => (
                     <button
                       key={method}
                       type="button"
-                      onClick={() => setPaymentMethod(method)}
+                      onClick={() => setPaymentMethod(method as 'cash' | 'qris' | 'ewallet' | 'bank_transfer')}
                       className={`rounded-lg border py-2 text-xs font-bold uppercase transition-all ${
                         paymentMethod === method
                           ? 'border-black bg-black text-white'
                           : 'border-clay/60 bg-white text-stone hover:border-black'
                       }`}
                     >
-                      {method}
+                      {method === 'bank_transfer' ? 'VA' : method}
                     </button>
                   ))}
                 </div>
+                {enabledMethods.length === 0 && <p className="mt-2 text-xs text-[#ba1a1a]">Tidak ada metode aktif. Atur di BackOffice &gt; Pembayaran.</p>}
               </div>
 
               {/* Form Input Tunai (CASH) & Calculation */}

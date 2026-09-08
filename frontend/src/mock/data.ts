@@ -60,6 +60,16 @@ export const seedBusiness: Business = {
   serviceChargeRate: 5,
   soundEnabled: true,
   openingCash: 0,
+  enabledPaymentMethods: ['cash', 'qris', 'ewallet', 'bank_transfer'],
+  paymentSettings: {
+    cash: { instruction: 'Bayar tunai di kasir', gateway: 'manual' },
+    qris: { instruction: 'Scan QR Midtrans otomatis', gateway: 'midtrans' },
+    ewallet: { gateway: 'midtrans', channel: 'gopay', instruction: 'Bayar via GoPay/ShopeePay Midtrans' },
+    bank_transfer: { gateway: 'midtrans', bank: 'bca', instruction: 'Transfer VA Midtrans otomatis' },
+  },
+  midtransMode: 'global',
+  hasMidtransCustomKey: false,
+  midtransQrisAcquirer: null,
 }
 
 export const seedStaff: StaffUser[] = [
@@ -268,7 +278,7 @@ export const seedOrders: Order[] = [
     customerName: 'Walk-in',
     source: 'pos',
     status: 'siap',
-    paymentMethod: 'debit',
+    paymentMethod: 'bank_transfer',
     paymentStatus: 'paid',
     subtotal: 70000,
     serviceCharge: 3500,

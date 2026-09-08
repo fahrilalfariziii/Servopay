@@ -50,6 +50,7 @@ const NAV_ITEMS: MenuItem[] = [
       { to: '/backoffice/settings/profile', label: 'Profile Akun' },
       { to: '/backoffice/settings/business', label: 'Profile Bisnis' },
       { to: '/backoffice/settings/tax', label: 'Pajak & Biaya' },
+      { to: '/backoffice/settings/payment', label: 'Pembayaran' },
     ],
   },
 ]

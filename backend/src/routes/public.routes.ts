@@ -5,6 +5,9 @@ import { prisma } from "../lib/prisma";
 import { AppError } from "../lib/errors";
 import { asyncHandler } from "../middleware/error-handler";
 import { createOrder } from "../services/order.service";
+import { buildMidtransItemDetails, createMidtransChargeForMethod, getMidtransTransactionStatus, verifyMidtransSignature } from "../services/midtrans.service";
+import { markOrderPaid } from "../services/order.service";
+import { emitOrderPaymentUpdate } from "../lib/socket";
 
 export const publicRouter = Router();
 
@@ -22,6 +25,8 @@ publicRouter.get(
       throw AppError.notFound("QR meja tidak valid atau tidak aktif");
     }
 
+    const midtransMode = (table.business as unknown as { midtransMode?: string }).midtransMode ?? "global";
+    const hasCustomKey = Boolean((table.business as unknown as { midtransServerKeyEnc?: string }).midtransServerKeyEnc);
     res.json({
       table: {
         id: table.id,
@@ -40,6 +45,11 @@ publicRouter.get(
         taxBearer: table.business.taxBearer,
         serviceChargeEnabled: table.business.serviceChargeEnabled,
         serviceChargeRate: table.business.serviceChargeRate,
+        enabledPaymentMethods: (table.business as unknown as { enabledPaymentMethods?: unknown }).enabledPaymentMethods ?? ["cash", "qris"],
+        paymentSettings: (table.business as unknown as { paymentSettings?: unknown }).paymentSettings ?? {},
+        midtransMode,
+        hasMidtransCustomKey: hasCustomKey,
+        midtransQrisAcquirer: (table.business as unknown as { midtransQrisAcquirer?: string }).midtransQrisAcquirer ?? null,
       },
     });
   })
@@ -86,7 +96,7 @@ const createSelfOrderSchema = z.object({
   qrToken: z.string().min(1),
   clientOrderId: z.string().min(1).optional(),
   customerName: z.string().min(1),
-  paymentMethod: z.enum(["cash", "qris"]),
+  paymentMethod: z.enum(["cash", "qris", "ewallet", "bank_transfer"]),
   items: z
     .array(
       z.object({
@@ -119,6 +129,44 @@ publicRouter.post(
       items: data.items,
     });
 
+    // Jika metode non-cash dan owner set gateway=midtrans, trigger Midtrans charge otomatis
+    if ((data.paymentMethod as string) !== "cash") {
+      try {
+        const business = await prisma.business.findUnique({ where: { id: table.businessId } });
+        const settings = (business?.paymentSettings as Record<string, { gateway?: string }>) ?? {};
+        const methodGateway = settings[data.paymentMethod]?.gateway;
+        const shouldUseMidtrans = methodGateway === "midtrans" || (methodGateway === undefined && (data.paymentMethod as string) !== "cash");
+        // default: jika gateway belum eksplisit, qris/ewallet/bank_transfer coba midtrans jika key tersedia
+        if (shouldUseMidtrans && business) {
+          const charge = await createMidtransChargeForMethod({
+            business: business as unknown as Parameters<typeof createMidtransChargeForMethod>[0]["business"],
+            method: data.paymentMethod as "qris" | "ewallet" | "bank_transfer",
+            orderNumber: order.orderNumber,
+            grossAmount: Number(order.total),
+            customerName: data.customerName,
+            paymentSettings: (business.paymentSettings as Record<string, { acquirer?: string; bank?: string; channel?: string; wallets?: string[] }>) ?? {},
+            itemDetails: buildMidtransItemDetails({
+              items: order.items.map((i) => ({ productId: i.productId, productName: i.productName, price: i.price, quantity: i.quantity, optionsLabel: i.optionsLabel })),
+              serviceCharge: order.serviceCharge,
+              tax: order.tax,
+              taxLabel: order.taxLabel,
+            }),
+          });
+          if (charge) {
+            await prisma.payment.updateMany({
+              where: { orderId: order.id },
+              data: { gateway: "midtrans", reference: charge.transactionId, gatewayData: charge as unknown as object },
+            });
+            const refreshed = await prisma.order.findUnique({ where: { id: order.id }, include: { items: true, payments: true, statusLogs: true, table: true } });
+            if (refreshed) return res.status(201).json(refreshed);
+          }
+        }
+      } catch (e) {
+        console.error("[Midtrans charge] gagal:", e);
+        // tetap return order tanpa gatewayData — FE akan tampil retry
+      }
+    }
+
     res.status(201).json(order);
   })
 );
@@ -129,9 +177,118 @@ publicRouter.get(
   asyncHandler(async (req, res) => {
     const order = await prisma.order.findUnique({
       where: { clientOrderId: req.params.clientOrderId },
-      include: { items: true, statusLogs: { orderBy: { createdAt: "asc" } } },
+      include: { items: true, payments: true, statusLogs: { orderBy: { createdAt: "asc" } } },
     });
     if (!order) throw AppError.notFound("Order tidak ditemukan");
     res.json(order);
+  })
+);
+
+// GET /api/public/orders/by-number/:orderNumber/status — poll Midtrans status (fallback webhook)
+publicRouter.get(
+  "/orders/by-number/:orderNumber/status",
+  asyncHandler(async (req, res) => {
+    const order = await prisma.order.findUnique({ where: { orderNumber: req.params.orderNumber }, include: { payments: true } });
+    if (!order) throw AppError.notFound("Order tidak ditemukan");
+    const business = await prisma.business.findUnique({ where: { id: order.businessId } });
+    if (!business) throw AppError.notFound("Bisnis tidak ditemukan");
+    const midtransStatus = await getMidtransTransactionStatus(business as unknown as Parameters<typeof getMidtransTransactionStatus>[0], order.orderNumber);
+    if (!midtransStatus) return res.json({ order, midtrans: null });
+    // Fallback rekonstruksi qrUrl QRIS bila gatewayData lama terlanjur tertimpa webhook
+    // (pola resmi Midtrans: GET /v2/qris/:transaction_id/qr-code).
+    try {
+      const payment = (order as unknown as { payments?: Array<{ gatewayData?: Record<string, unknown>; reference?: string | null }> }).payments?.[0];
+      const gd = (payment?.gatewayData ?? {}) as Record<string, unknown>;
+      if (order.paymentMethod === "qris" && !gd.qrUrl) {
+        const txId = String((midtransStatus.transaction_id as string) || payment?.reference || "");
+        if (txId) {
+          const isProd = (process.env.MIDTRANS_IS_PRODUCTION || "false").toLowerCase() === "true";
+          const base = isProd ? "https://api.midtrans.com" : "https://api.sandbox.midtrans.com";
+          (midtransStatus as Record<string, unknown>).fallbackQrUrl = `${base}/v2/qris/${txId}/qr-code`;
+        }
+      }
+    } catch {}
+    const txStatus = (midtransStatus.transaction_status as string) || "";
+    // Auto-sync jika sudah settlement di Midtrans tapi lokal masih pending
+    if ((txStatus === "settlement" || txStatus === "capture") && order.paymentStatus !== "paid") {
+      try {
+        const updated = await markOrderPaid(business.id, order.id, { reference: (midtransStatus.transaction_id as string) || undefined });
+        emitOrderPaymentUpdate(business.id, updated);
+        return res.json({ order: updated, midtrans: midtransStatus });
+      } catch {}
+    }
+    if ((txStatus === "expire" || txStatus === "deny" || txStatus === "cancel") && order.paymentStatus === "pending") {
+      await prisma.order.update({ where: { id: order.id }, data: { paymentStatus: "failed" } });
+      await prisma.payment.updateMany({ where: { orderId: order.id }, data: { status: "failed" } });
+    }
+    res.json({ order, midtrans: midtransStatus });
+  })
+);
+
+// POST /api/public/midtrans/notification — webhook Midtrans (public, verify signature)
+publicRouter.post(
+  "/midtrans/notification",
+  asyncHandler(async (req, res) => {
+    const body = req.body as Record<string, unknown>;
+    const orderId = String(body.order_id || "");
+    const statusCode = String(body.status_code || "");
+    const grossAmount = String(body.gross_amount || "");
+    const signatureKey = String(body.signature_key || "");
+    const transactionStatus = String(body.transaction_status || "");
+    const transactionId = String(body.transaction_id || "");
+    const paymentType = String(body.payment_type || "");
+
+    if (!orderId) throw AppError.badRequest("order_id wajib");
+
+    const order = await prisma.order.findUnique({ where: { orderNumber: orderId } });
+    if (!order) throw AppError.notFound("Order tidak ditemukan untuk notification");
+
+    const business = await prisma.business.findUnique({ where: { id: order.businessId } });
+    if (!business) throw AppError.notFound("Bisnis tidak ditemukan");
+
+    // Resolve ServerKey untuk verifikasi signature
+    const enc = (business as unknown as { midtransServerKeyEnc?: string }).midtransServerKeyEnc;
+    let serverKey = process.env.MIDTRANS_SERVER_KEY || "";
+    if ((business as unknown as { midtransMode?: string }).midtransMode === "custom" && enc) {
+      try {
+        const { decrypt } = await import("../lib/encryption");
+        serverKey = decrypt(enc);
+      } catch {}
+    }
+    if (!serverKey) {
+      console.warn("[Midtrans notification] ServerKey tidak dikonfigurasi");
+      return res.json({ status: "ignored", reason: "no server key" });
+    }
+    const valid = verifyMidtransSignature({ order_id: orderId, status_code: statusCode, gross_amount: grossAmount, signature_key: signatureKey, serverKey });
+    if (!valid) throw AppError.badRequest("signature_key tidak valid");
+
+    // Merge agar qrUrl/qrString dari charge tidak hilang tertimpa body notifikasi.
+    const existingPayments = await prisma.payment.findMany({ where: { orderId: order.id } });
+    const existingGatewayData = (existingPayments[0]?.gatewayData as Record<string, unknown>) ?? {};
+    const mergedGatewayData = {
+      ...(typeof existingGatewayData === "object" && existingGatewayData !== null ? existingGatewayData : {}),
+      lastNotification: body,
+      lastStatus: transactionStatus,
+      updatedAt: new Date().toISOString(),
+    } as unknown as object;
+
+    if (transactionStatus === "settlement" || transactionStatus === "capture") {
+      if (order.paymentStatus !== "paid") {
+        const updated = await markOrderPaid(business.id, order.id, { reference: transactionId || paymentType });
+        // update gatewayData paid flag (merge, jangan overwrite qrUrl)
+        await prisma.payment.updateMany({ where: { orderId: order.id }, data: { gatewayData: mergedGatewayData } });
+        emitOrderPaymentUpdate(business.id, updated);
+      }
+    } else if (transactionStatus === "expire" || transactionStatus === "deny" || transactionStatus === "cancel" || transactionStatus === "failure") {
+      await prisma.order.update({ where: { id: order.id }, data: { paymentStatus: "failed" } });
+      await prisma.payment.updateMany({ where: { orderId: order.id }, data: { status: "failed", gatewayData: mergedGatewayData } });
+      const failedOrder = await prisma.order.findUnique({ where: { id: order.id }, include: { items: true, payments: true } });
+      if (failedOrder) emitOrderPaymentUpdate(business.id, failedOrder);
+    } else if (transactionStatus === "pending") {
+      // biarkan pending, simpan notifikasi tanpa hapus qrUrl/qrString charge
+      await prisma.payment.updateMany({ where: { orderId: order.id }, data: { gatewayData: mergedGatewayData } });
+    }
+
+    res.json({ status: "ok" });
   })
 );

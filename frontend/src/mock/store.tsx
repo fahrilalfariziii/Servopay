@@ -32,6 +32,7 @@ import type {
   StaffUser,
   StockMovement,
 } from '../shared/types'
+import type { PaymentSettings } from '../shared/types'
 
 interface Session {
   user: StaffUser
@@ -72,7 +73,7 @@ interface CafeStore {
   upsertIngredient: (ingredient: Ingredient) => void
   removeIngredient: (ingredientId: string) => void
   recordStock: (ingredientId: string, type: StockMovement['type'], quantity: number, notes: string) => void
-  updateBusiness: (patch: Partial<Business>) => void
+  updateBusiness: (patch: Partial<Business> & { enabledPaymentMethods?: PaymentMethod[]; paymentSettings?: Record<string, PaymentSettings> }) => void
   upsertStaff: (user: StaffUser) => void
   removeStaff: (staffId: string) => void 
   setConnection: (status: ConnectionStatus) => void
@@ -126,7 +127,7 @@ export function CafeProvider({ children }: { children: ReactNode }) {
         source,
         status: 'diterima',
         paymentMethod,
-        paymentStatus: paymentMethod === 'cash' || offline ? 'pending' : paymentMethod === 'qris' ? 'pending' : 'paid',
+        paymentStatus: paymentMethod === 'cash' || offline || ['qris','ewallet','bank_transfer'].includes(paymentMethod) ? 'pending' : 'paid',
         subtotal,
         serviceCharge,
         tax,

@@ -9,7 +9,7 @@ const NAV = [
 ]
 
 export function PosHeader() {
-  const {connection, pendingSyncCount, business, session, logout, syncNow } = useCafe()
+  const {connection, pendingSyncCount, business, session, syncNow } = useCafe()
   const navigate = useNavigate()
 
   return (
@@ -98,16 +98,6 @@ export function PosHeader() {
             {session.user.name}
           </span>
         )}
-        <button
-          className="flex size-9 items-center justify-center rounded-lg text-muted hover:bg-sand hover:text-black transition-colors"
-          onClick={() => {
-            logout()
-            navigate('/login')
-          }}
-          title="Keluar"
-        >
-          <span className="material-symbols-outlined text-[20px]">logout</span>
-        </button>
       </div>
     </header>
   )

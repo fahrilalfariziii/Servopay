@@ -6,6 +6,7 @@ import { Button, Field, TextInput } from '../../../shared/components/ui'
 
 export function StaffPage() {
   const { staff, upsertStaff,removeStaff } = useCafe()
+  const visibleStaff = staff.filter((s) => s.role !== 'owner')
 
   // State Modal Form (Tambah / Edit)
   const [isFormOpen, setIsFormOpen] = useState(false)
@@ -111,7 +112,7 @@ export function StaffPage() {
             </tr>
           </thead>
           <tbody>
-            {staff.map((s) => (
+            {visibleStaff.map((s) => (
               <tr key={s.id} className="border-t border-sand hover:bg-cream/30 transition-colors">
                 <td className="px-5 py-3.5 font-bold text-black">{s.name}</td>
                 <td className="px-5 py-3.5 text-stone">{s.email}</td>
@@ -165,7 +166,7 @@ export function StaffPage() {
               </tr>
             ))}
 
-            {staff.length === 0 && (
+            {visibleStaff.length === 0 && (
               <tr>
                 <td colSpan={5} className="py-12 text-center text-xs text-stone">
                   Belum ada data staff.
@@ -221,7 +222,6 @@ export function StaffPage() {
                 >
                   <option value="kasir">Kasir</option>
                   <option value="barista">Barista</option>
-                  <option value="owner">Owner</option>
                 </select>
               </Field>
 

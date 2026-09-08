@@ -1,8 +1,22 @@
 export type UserRole = 'owner' | 'kasir' | 'barista'
 
 export type OrderStatus = 'diterima' | 'diproses' | 'siap' | 'selesai'
-export type PaymentMethod = 'qris' | 'cash' | 'transfer' | 'debit'
+export type PaymentMethod = 'cash' | 'qris' | 'ewallet' | 'bank_transfer'
 export type PaymentStatus = 'pending' | 'paid' | 'failed'
+
+export interface PaymentSettings {
+  instruction?: string
+  qrImageUrl?: string
+  bankName?: string
+  accountNumber?: string
+  accountName?: string
+  wallets?: string[]
+  gateway?: 'manual' | 'midtrans'
+  // Deprecated: tidak dikirim ke Midtrans lagi, diabaikan backend.
+  acquirer?: string
+  bank?: 'bca' | 'bni' | 'bri' | 'mandiri' | 'permata' | 'cimb'
+  channel?: 'gopay' | 'shopeepay'
+}
 export type OrderSource = 'self_order' | 'pos'
 export type ConnectionStatus = 'online' | 'offline' | 'syncing'
 export type StockMovementType = 'in' | 'out' | 'adjustment' | 'waste'
@@ -28,6 +42,11 @@ export interface Business {
   soundEnabled: boolean
   openingCash: number
   qrTemplate?: QrConfig
+  enabledPaymentMethods: PaymentMethod[]
+  paymentSettings: Record<string, PaymentSettings>
+  midtransMode: 'global' | 'custom'
+  hasMidtransCustomKey: boolean
+  midtransQrisAcquirer?: string | null
 }
 
 export interface StaffUser {

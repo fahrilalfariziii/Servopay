@@ -15,6 +15,8 @@ export interface CreateOrderItemInput {
   selectedOptionIds?: number[];
 }
 
+export type PaymentMethodInput = "cash" | "qris" | "ewallet" | "bank_transfer";
+
 export interface CreateOrderInput {
   businessId: number;
   clientOrderId: string; // idempotency key dari client (self-order / offline POS)
@@ -22,8 +24,21 @@ export interface CreateOrderInput {
   userId?: number | null; // staff yang input (untuk order manual dari POS)
   customerName?: string | null;
   source: "self_order" | "pos";
-  paymentMethod: "cash" | "qris";
+  paymentMethod: PaymentMethodInput;
   items: CreateOrderItemInput[];
+}
+
+function parseEnabledMethods(business: { enabledPaymentMethods?: unknown }): string[] | null {
+  const raw = (business as unknown as { enabledPaymentMethods?: unknown }).enabledPaymentMethods;
+  if (raw == null) return null; // kolom belum ada (belum migrate) -> skip validasi
+  if (Array.isArray(raw)) return raw as string[];
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed as string[];
+    } catch {}
+  }
+  return null;
 }
 
 const MAX_ORDER_NUMBER_RETRY = 5;
@@ -43,6 +58,11 @@ export async function createOrder(input: CreateOrderInput) {
 
   const business = await prisma.business.findUnique({ where: { id: input.businessId } });
   if (!business) throw AppError.notFound("Bisnis tidak ditemukan");
+
+  const enabled = parseEnabledMethods(business);
+  if (enabled && !enabled.includes(input.paymentMethod)) {
+    throw AppError.badRequest(`Metode pembayaran "${input.paymentMethod}" tidak aktif untuk bisnis ini`);
+  }
 
   if (input.tableId) {
     const table = await prisma.cafeTable.findFirst({
@@ -193,7 +213,7 @@ export async function updateOrderStatus(
 export async function markOrderPaid(
   businessId: number,
   orderId: number,
-  input: { method?: "cash" | "qris"; reference?: string }
+  input: { method?: PaymentMethodInput; reference?: string }
 ) {
   const order = await prisma.order.findFirst({
     where: { id: orderId, businessId },
@@ -205,7 +225,7 @@ export async function markOrderPaid(
   }
 
   const paidAt = new Date();
-  const method = input.method ?? (order.paymentMethod as "cash" | "qris");
+  const method = input.method ?? (order.paymentMethod as PaymentMethodInput);
 
   const [updatedOrder] = await prisma.$transaction([
     prisma.order.update({

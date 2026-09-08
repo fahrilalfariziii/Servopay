@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useCafe } from '../../mock/store'
 import type { CartItem, PaymentMethod, Product } from '../../shared/types'
@@ -13,7 +13,7 @@ type Screen = 'menu' | 'cart' | 'payment' | 'status'
 
 export function SelfOrderApp() {
   const { token } = useParams()
-  const { tables, products, placeOrder, orders } = useCafe()
+  const { tables, products, placeOrder, orders, business } = useCafe()
   // Fallback ke meja 04 hanya jika token tidak ada (mis. akses langsung /order tanpa token).
   // Jika token ada tapi tidak valid/inaktif -> tampilkan error "Meja tidak ditemukan".
   const fallbackTable = tables.find((t) => t.tableNumber === '04')
@@ -23,8 +23,15 @@ export function SelfOrderApp() {
   const [cart, setCart] = useState<CartItem[]>([])
   const [popup, setPopup] = useState<Product | null>(null)
   const [customerName, setCustomerName] = useState('')
-  const [payMethod, setPayMethod] = useState<PaymentMethod>('qris')
+  const enabledMethods = (business.enabledPaymentMethods as PaymentMethod[]) ?? ['cash', 'qris']
+  const [payMethod, setPayMethod] = useState<PaymentMethod>(enabledMethods[0] ?? 'cash')
   const [activeOrderId, setActiveOrderId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!enabledMethods.includes(payMethod) && enabledMethods.length > 0) {
+      setPayMethod(enabledMethods[0])
+    }
+  }, [enabledMethods.join(','), payMethod])
 
   const activeOrder = orders.find((o) => o.id === activeOrderId) ?? null
 
@@ -66,7 +73,7 @@ export function SelfOrderApp() {
     setActiveOrderId(order.id)
     setCart([]) // Kosongkan keranjang setelah checkout berhasil
 
-    if (payMethod === 'qris') setScreen('payment')
+    if (payMethod !== 'cash') setScreen('payment')
     else setScreen('status')
   }
 
