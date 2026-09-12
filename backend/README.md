@@ -1,10 +1,10 @@
-# Servopay Backend
+# Ordria Backend
 
 Backend REST API + Realtime untuk aplikasi Coffee Shop Management (Self-Order, Frontoffice/POS,
 BackOffice/Owner), dibangun sesuai skema & aturan bisnis di `../docs/prd_POS_updated.md`.
 
-Project ini **berdiri sendiri** — belum disambungkan ke `../frontend`. Semua endpoint bisa dites
-langsung lewat curl/Postman/Insomnia.
+Project ini **berdiri sendiri** — semua endpoint bisa dites langsung lewat curl/Postman/Insomnia —
+**dan** sudah dipakai `../apps/web-app` (REST + Socket.io). Alur §3 di bawah tetap valid sebagai dokumentasi API.
 
 ## Stack
 
@@ -12,7 +12,9 @@ langsung lewat curl/Postman/Insomnia.
 - **PostgreSQL** (lewat Docker Compose untuk development)
 - **Prisma ORM** — schema & migrasi type-safe, gampang dipindah ke Postgres managed apa pun nanti
 - **JWT + bcrypt** — autentikasi & hashing password sendiri (tidak bergantung ke Supabase Auth)
-- **Socket.io** — realtime order baru & perubahan status
+- **Socket.io** — realtime order baru & perubahan status (per-room `business:<id>`)
+- **Zod + helmet + rate-limit + cookie-parser** — validasi input, security headers, anti brute-force/flood, httpOnly cookie
+- Body JSON limit **5mb** (logo/foto dataURL dari frontend)
 
 ## 1. Setup
 
@@ -52,6 +54,13 @@ Server jalan di `http://localhost:4000`. Cek `GET http://localhost:4000/health` 
 | Barista | barista@beanbrew.id | Barista123! |
 
 QR token meja contoh: `table-01` s/d `table-06` (table-06 nonaktif).
+
+Akun platform admin (login terpisah `POST /api/platform/auth/login`, cookie `platform_token`):
+
+| Role       | Email              | Password   |
+| ---------- | ------------------ | ---------- |
+| Superadmin | admin@ordria.id  | Admin123!  |
+| Support    | support@ordria.id | Support123! |
 
 ## 3. Alur testing tanpa frontend (curl / Postman)
 
@@ -118,9 +127,14 @@ curl -s -X POST http://localhost:4000/api/public/orders \
 curl -s http://localhost:4000/api/public/orders/<clientOrderId-dari-response-checkout>
 
 # 6. Polling status Midtrans + auto-sync paid (fallback webhook, tanpa perlu ngrok)
-curl -s http://localhost:4000/api/public/orders/by-number/BE-9028/status
+#    memakai midtransOrderId unik per charge (tersimpan di payments.gatewayData.orderId)
+curl -s http://localhost:4000/api/public/orders/by-client/<clientOrderId>/status
 # -> { order: {...paymentStatus...}, midtrans: { transaction_status } }
 #    Jika Midtrans sudah settlement tapi lokal masih pending, endpoint ini otomatis menandai paid.
+
+# 7. Terbitkan ulang QR/VA bila charge pertama gagal (ID Midtrans baru, order sama)
+curl -s -X POST http://localhost:4000/api/public/orders/by-client/<clientOrderId>/recharge \
+  -H "Content-Type: application/json" -d '{}'
 ```
 
 ### 3.3. Webhook Midtrans (butuh URL publik, mis. ngrok) — bisa diuji
@@ -130,7 +144,8 @@ curl -s http://localhost:4000/api/public/orders/by-number/BE-9028/status
 # Midtrans akan POST ke sini saat status berubah (pending/settlement/expire).
 # Verifikasi signature SHA512(order_id+status_code+gross_amount+ServerKey) otomatis;
 # settlement -> order paid + emit socket order:payment_updated.
-curl -s http://localhost:4000/api/public/orders/by-number/BE-9028/status
+# Lookup 2 lapis: cocok orderNumber persis, lalu payments.gatewayData.orderId (ID unik per charge).
+curl -s http://localhost:4000/api/public/orders/by-client/<clientOrderId>/status
 ```
 
 ### 3.4. Orders staff (Frontoffice) — bisa diuji
@@ -146,6 +161,13 @@ curl -s http://localhost:4000/api/orders/1 -H "Authorization: Bearer $TOKEN"
 curl -s -X POST http://localhost:4000/api/orders \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"customerName":"Walk-in","paymentMethod":"cash","items":[{"productId":1,"quantity":2}]}'
+
+# Mode record-only kasir (tanpa Midtrans SEMUA metode, status pending, tendered/kembalian tersimpan)
+curl -s -X POST http://localhost:4000/api/orders \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"customerName":"Walk-in","paymentMethod":"cash","recordOnly":true,"tendered":50000,"items":[{"productId":1,"quantity":2}]}'
+# -> payments.gateway = "manual", gatewayData = { recordOnly, tendered, change }
+#    cash dengan tendered < total -> 400 + order dibatalkan
 
 # Ubah status (diterima -> diproses -> siap -> selesai)
 curl -s -X PATCH http://localhost:4000/api/orders/1/status \
@@ -165,10 +187,16 @@ curl -s -X PATCH http://localhost:4000/api/orders/1/pay \
 curl -s http://localhost:4000/api/business -H "Authorization: Bearer $TOKEN"
 
 # Update bisnis (owner only): identitas, pajak, service charge, metode pembayaran,
-# paymentSettings per metode (gateway manual|midtrans), midtransMode global|custom
+# paymentSettings per metode (gateway manual|midtrans), midtransMode global|custom, theme, qrTemplate
 curl -s -X PUT http://localhost:4000/api/business \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"taxEnabled":true,"taxLabel":"PB1","taxRate":10,"enabledPaymentMethods":["cash","qris","bank_transfer"]}'
+
+# Modal kas & suara (owner/kasir/barista): openingCash (buka shift baru), closingCash (tutup shift),
+# soundEnabled — tanpa bisa menyentuh pajak/harga
+curl -s -X PATCH http://localhost:4000/api/business/cash-settings \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"openingCash":500000}'
 
 # Staff (owner only)
 curl -s http://localhost:4000/api/staff -H "Authorization: Bearer $TOKEN"
@@ -195,23 +223,33 @@ curl -s -X PATCH http://localhost:4000/api/products/1/availability \
 ### 3.6. Ingredients & Analytics — bisa diuji
 
 ```bash
-# Bahan
-curl -s http://localhost:4000/api/ingredients -H "Authorization: Bearer $TOKEN"
+# Bahan (tambah/edit: owner/kasir/barista; nonaktifkan: owner only)
+curl -s -X POST http://localhost:4000/api/ingredients \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"Gula Aren","unit":"kg","currentStock":10,"minimumStock":2}'
 
-# Catat pergerakan stok (satu-satunya cara mengubah current_stock)
+# Catat pergerakan stok (satu-satunya cara mengubah current_stock; SEMUA tipe terbuka semua staff)
+# - in (receive): qty>0 + opsional supplier/referenceNo/unitCost/batchNo/expiryDate
+# - adjustment: qty +/-(≠0) + WAJIB reason (waste_damage|variance_missing|internal_promo|correction)
 curl -s -X POST http://localhost:4000/api/ingredients/1/movements \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"type":"in","quantity":5,"notes":"Restock"}'
+  -d '{"type":"in","quantity":5,"notes":"Restock","supplier":"PT Kopi","referenceNo":"SJ-001"}'
+curl -s -X POST http://localhost:4000/api/ingredients/1/movements \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"type":"adjustment","quantity":-2,"reason":"waste_damage","notes":"Susu basi"}'
 curl -s http://localhost:4000/api/ingredients/1/movements -H "Authorization: Bearer $TOKEN"
+# Status isAvailable otomatis: habis (<=0) -> false; terisi dari kosong -> true
 
 # Analytics (period = daily|weekly|monthly)
 curl -s "http://localhost:4000/api/analytics/dashboard?period=daily" -H "Authorization: Bearer $TOKEN"
 curl -s "http://localhost:4000/api/analytics/sales?period=weekly" -H "Authorization: Bearer $TOKEN"
 ```
 
-**Realtime (Socket.io):** hubungkan ke server lalu `emit("join", { businessId: 1 })` (atau
-`{ token: JWT }` untuk staff), lalu dengarkan event `order:new`, `order:status_updated`,
-`order:payment_updated`, `product:availability_updated`, `ingredient:stock_updated`.
+**Realtime (Socket.io):** pelanggan join via `emit("join", { qrToken: "<qr-meja>" })`
+(businessId di-resolve server, bukan dipercaya dari client); staff join via `{ token: JWT }`.
+Dengarkan event `order:new`, `order:status_updated`, `order:payment_updated`,
+`product:availability_updated` (CRUD produk/kategori/opsi juga emit ini),
+`ingredient:stock_updated`, `business:cash_updated`, `business:updated`.
 
 ## 4. Struktur folder
 
@@ -219,7 +257,7 @@ curl -s "http://localhost:4000/api/analytics/sales?period=weekly" -H "Authorizat
 backend/
 ├── prisma/
 │   ├── schema.prisma      # 12 tabel sesuai ERD di PRD §6
-│   └── seed.ts            # data contoh (samakan dengan frontend/src/mock/data.ts)
+│   └── seed.ts            # data contoh (samakan dengan apps/web-app/src/mock/data.ts)
 └── src/
     ├── index.ts           # bootstrap: http server + socket.io + listen
     ├── app.ts             # express app, middleware, mount /api
@@ -237,33 +275,42 @@ backend/
 | ------ | ----------------------------------------------- | ------------------------------------------------------------------ |
 | GET    | `/api/public/tables/:qrToken`                   | Resolve meja + info bisnis (pajak/service/metode pembayaran)       |
 | GET    | `/api/public/businesses/:id/catalog`            | Katalog kategori+produk+opsi tersedia                              |
+| GET    | `/api/public/plans`                             | Daftar paket SaaS (Starter/Pro/Enterprise) untuk Landing Page      |
+| POST   | `/api/public/leads`                             | Form konsultasi sales `/hubungi-sales` (tersimpan di `backend/data/leads.json`) |
 | POST   | `/api/public/orders`                            | Checkout (cash manual / qris-ewallet-VA via Midtrans bila aktif)   |
+| POST   | `/api/public/orders/by-client/:clientOrderId/recharge` | Terbitkan ulang charge Midtrans (ID unik baru) untuk order pending yang QR/VA-nya gagal terbit |
 | GET    | `/api/public/orders/:clientOrderId`             | Cek status order (polling fallback)                                |
 | GET    | `/api/public/orders/by-number/:orderNumber/status` | Polling status Midtrans + auto-sync paid + fallbackQrUrl QRIS   |
-| POST   | `/api/public/midtrans/notification`             | Webhook Midtrans (verify signature, settlement→paid otomatis)       |
+| POST   | `/api/public/midtrans/notification`             | Webhook Midtrans (verify signature, settlement→paid otomatis, expire/deny/cancel→failed + auto-batal) |
 
 ### Auth
 
-| Method | Path              | Keterangan            |
-| ------ | ----------------- | ---------------------- |
-| POST   | `/api/auth/login` | Login, dapat JWT       |
-| GET    | `/api/auth/me`    | Profil user yang login |
+| Method | Path              | Keterangan                                   |
+| ------ | ----------------- | --------------------------------------------- |
+| POST   | `/api/auth/login` | Login, dapat JWT (httpOnly cookie + Bearer)   |
+| GET    | `/api/auth/me`    | Profil user yang login                        |
+| POST   | `/api/auth/refresh` | Silent refresh token (7 hari, sliding)      |
+| POST   | `/api/auth/logout` | Hapus cookie sesi                            |
+| PATCH  | `/api/auth/password` | Ganti password sendiri (semua role, verifikasi bcrypt) |
+| POST   | `/api/auth/forgot-password` | Minta link reset (khusus owner; selalu 200; token 1 jam, sekali pakai; tanpa SMTP link hanya di console dev) |
+| POST   | `/api/auth/reset-password` | Tukar token menjadi password baru (validasi kuat) |
 
 ### Business (owner untuk update)
 
 | Method | Path            | Role  | Keterangan                                                              |
 | ------ | --------------- | ----- | ------------------------------------------------------------------------ |
 | GET    | `/api/business` | staff | Profil bisnis (tanpa ServerKey Midtrans, ada flag hasMidtransCustomKey)  |
-| PUT    | `/api/business` | owner | Identitas, pajak, service charge, enabledPaymentMethods, paymentSettings (gateway manual\|midtrans, bank/channel), midtransMode global\|custom + ServerKey terenkripsi |
+| PUT    | `/api/business` | owner | Identitas, pajak, service, enabledPaymentMethods, paymentSettings (channel/bank VA, midtransMode), midtransMode/custom + ServerKey terenkripsi, theme, qrTemplate (nullable). `gateway`/`instruction` lama tetap diterima tapi diabaikan (non-cash selalu Midtrans) |
+| PATCH  | `/api/business/cash-settings` | owner,kasir,barista | Buka/tutup shift (`openingCash` reset closing, `closingCash` + `cashClosedAt` otomatis, `soundEnabled`) + emit `business:cash_updated`; PUT emit `business:updated` |
 
 ### Staff (owner only)
 
-| Method | Path             | Keterangan                    |
-| ------ | ---------------- | ------------------------------ |
-| GET    | `/api/staff`     | List staff                     |
-| POST   | `/api/staff`     | Tambah staff                   |
-| PUT    | `/api/staff/:id` | Edit staff / ganti password    |
-| DELETE | `/api/staff/:id` | Nonaktifkan staff (soft delete)|
+| Method | Path             | Keterangan                                   |
+| ------ | ---------------- | --------------------------------------------- |
+| GET    | `/api/staff`     | List staff                                    |
+| POST   | `/api/staff`     | Tambah staff (password strong 8+)             |
+| PUT    | `/api/staff/:id` | Edit staff (nama/email/role/active; password opsional = tidak diubah) |
+| DELETE | `/api/staff/:id` | Nonaktifkan staff (soft delete)               |
 
 ### Tables (meja)
 
@@ -292,20 +339,21 @@ backend/
 | ------ | ------------------------ | ----- | ----------------------------------------- |
 | GET    | `/api/orders`            | staff | Feed order (filter status/source/payment) |
 | GET    | `/api/orders/:id`        | staff | Detail order                              |
-| POST   | `/api/orders`            | staff | Input pesanan manual (Frontoffice)        |
-| PATCH  | `/api/orders/:id/status` | staff | Ubah status (diterima→diproses→siap→selesai) |
-| PATCH  | `/api/orders/:id/pay`    | staff | Catat/verifikasi pembayaran lunas         |
+| POST   | `/api/orders`            | staff | Manual kasir; `recordOnly:true` = tanpa Midtrans + `tendered`/`change` |
+| PATCH  | `/api/orders/:id/status` | staff | Ubah status (diterima→diproses→siap→selesai→batal; batal bersifat final) |
+| PATCH  | `/api/orders/:id/pay`    | owner,kasir | Catat lunas manual (cash; non-cash hanya via webhook/polling) |
+| PATCH  | `/api/orders/:id/cancel` | staff | Batalkan order belum lunas (masuk riwayat; tolak bila paid/selesai) |
 
 ### Ingredients & Stock Movements
 
 | Method | Path                          | Keterangan                                  |
 | ------ | ----------------------------- | --------------------------------------------|
-| GET    | `/api/ingredients`            | List bahan                                   |
-| POST   | `/api/ingredients`            | Tambah bahan                                 |
-| PUT    | `/api/ingredients/:id`        | Edit info bahan                              |
-| DELETE | `/api/ingredients/:id`        | Nonaktifkan bahan                            |
+| GET    | `/api/ingredients`            | List bahan (semua staff)                     |
+| POST   | `/api/ingredients`            | Tambah bahan (owner/kasir/barista)           |
+| PUT    | `/api/ingredients/:id`        | Edit info bahan, tanpa currentStock (owner/kasir/barista) |
+| DELETE | `/api/ingredients/:id`        | Nonaktifkan bahan (owner only)               |
 | GET    | `/api/ingredients/:id/movements` | Riwayat pergerakan stok                   |
-| POST   | `/api/ingredients/:id/movements` | Catat stok in/out/adjustment/waste        |
+| POST   | `/api/ingredients/:id/movements` | Catat stok, semua staff (aturan per tipe, lihat §3.6) |
 
 ### Analytics (BackOffice)
 
@@ -316,6 +364,61 @@ backend/
 
 Semua endpoint yang butuh login memakai header `Authorization: Bearer <token>`.
 
+### Platform Admin (internal — Fase 3 SaaS)
+
+Login terpisah dari staff tenant (JWT `scope: platform`, cookie `platform_token`).
+Token tenant ditolak di sini dan sebaliknya. Role `support` read-only untuk
+billing (buat/bayar invoice), tulis paket, dan reset password owner (403).
+
+```bash
+PTOKEN=$(curl -s -X POST http://localhost:4000/api/platform/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@ordria.id","password":"Admin123!"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+
+# Daftar tenant + onboarding + ubah paket/status
+curl -s http://localhost:4000/api/platform/tenants -H "Authorization: Bearer $PTOKEN"
+curl -s http://localhost:4000/api/platform/tenants/1 -H "Authorization: Bearer $PTOKEN"
+curl -s -X PATCH http://localhost:4000/api/platform/tenants/1/plan \
+  -H "Authorization: Bearer $PTOKEN" -H "Content-Type: application/json" \
+  -d '{"planCode":"starter"}'
+
+# Billing manual + CMS landing + analytics + audit + leads
+curl -s -X POST http://localhost:4000/api/platform/invoices \
+  -H "Authorization: Bearer $PTOKEN" -H "Content-Type: application/json" \
+  -d '{"businessId":1,"amount":249000}'
+curl -s http://localhost:4000/api/platform/landing-content -H "Authorization: Bearer $PTOKEN"
+curl -s http://localhost:4000/api/public/landing-content
+curl -s http://localhost:4000/api/platform/analytics/overview -H "Authorization: Bearer $PTOKEN"
+curl -s "http://localhost:4000/api/platform/audit-logs?limit=5" -H "Authorization: Bearer $PTOKEN"
+```
+
+| Method | Path | Role | Keterangan |
+| ------ | ---- | ---- | ---------- |
+| POST | `/api/platform/auth/login` | publik | Login admin, cookie `platform_token` |
+| GET | `/api/platform/auth/me` | admin | Profil admin |
+| POST | `/api/platform/auth/logout` | admin | Hapus cookie |
+| GET | `/api/platform/tenants` | admin | Daftar + agregat (filter plan/status/q) |
+| POST | `/api/platform/tenants` | admin | Onboarding (langsung `active`, tanpa trial) |
+| GET | `/api/platform/tenants/:id` | admin | Detail + agregat + riwayat audit |
+| PATCH | `/api/platform/tenants/:id/plan` | admin | Upgrade/downgrade (data historis aman) |
+| PATCH | `/api/platform/tenants/:id/status` | admin | active/past_due/suspended/canceled |
+| POST | `/api/platform/tenants/:id/reset-owner-password` | superadmin | Reset darurat |
+| PATCH/DELETE | `/api/platform/tenants/:id/feature-overrides` | superadmin | Override per-key / reset ke paket |
+| GET/PUT | `/api/platform/plans(/:code)` | admin/superadmin | Lihat semua / ubah paket |
+| GET/POST | `/api/platform/invoices` | admin/superadmin | List / buat manual |
+| PATCH | `/api/platform/invoices/:id/pay` | superadmin | Tandai lunas manual |
+| GET | `/api/platform/invoices/export.csv` | admin | Export CSV |
+| GET/PUT | `/api/platform/landing-content` | admin | CMS landing (publish) |
+| GET | `/api/public/landing-content` | publik | Konten published untuk landing |
+| GET | `/api/platform/analytics/overview` | admin | Tenant per paket, baru/bulan, MRR |
+| GET | `/api/platform/audit-logs` | admin | Filter bisnis/aksi |
+| GET/PATCH | `/api/platform/leads(/:id)` | admin | Tinjau lead |
+
+Feature gate tenant (paket Starter ditolak 403 dengan pesan upgrade):
+self-order publik (`POST /api/public/orders`, recharge), seluruh `/api/ingredients`,
+tulis `/api/tables`, field `theme` di `PUT /api/business`. Suspended tenant ditolak
+di semua endpoint operasional.
+
 ## 6. Aturan bisnis penting yang sudah diimplementasikan
 
 - **Kalkulasi total** persis mengikuti rumus di `frontend/src/mock/store.tsx`: `service = subtotal * (serviceChargeRate/100)`, `tax = (subtotal+service) * (taxRate/100)`, `total = subtotal+service+(taxBearer==='cafe' ? 0 : tax)`.
@@ -323,14 +426,28 @@ Semua endpoint yang butuh login memakai header `Authorization: Bearer <token>`.
 - **Nomor order unik** dengan retry otomatis kalau terjadi race condition antar request paralel.
 - **Snapshot harga**: `order_items.price` & `product_name` disimpan saat transaksi dibuat, tidak berubah walau harga produk diedit belakangan.
 - **Stock movement wajib**: `current_stock` bahan **hanya** bisa berubah lewat endpoint `POST /ingredients/:id/movements`, setiap perubahan otomatis tercatat sebagai riwayat.
+- **Status bahan otomatis**: stok habis (≤0) → `isAvailable=false`; terisi dari kosong → `true`; selain itu hormati flag manual.
+- **Validasi toleran**: angka (`price`, `quantity`, `minimumStock`, …) memakai `z.coerce` (terima `"5"` maupun `5`); string opsional memakai `nullish→undefined` (`null` = tidak diubah, bukan 400).
+- **Manual record-only**: `POST /api/orders` dengan `recordOnly:true` melewati Midtrans untuk semua metode; `tendered`/`change` tersimpan di `payments.gatewayData`.
 - **business_id di semua tabel operasional** — fondasi SaaS-ready sesuai PRD, walau saat ini baru dipakai untuk 1 bisnis.
 - **Realtime** order baru & perubahan status langsung di-broadcast lewat Socket.io per-room bisnis.
 
 ## 7. Midtrans (sudah terintegrasi, bukan roadmap)
 
+- **ID unik per charge:** nomor struk (`BE-9028`) boleh berulang (mis. habis seed ulang),
+  tapi setiap charge memakai `midtransOrderId = <orderNumber>-<base36 timestamp>` yang unik
+  selamanya — QRIS menolak `order_id` duplikat (VA mentoleransinya). ID tersimpan di
+  `payments.gatewayData.orderId`; polling status & webhook memakai ID itu, bukan nomor struk.
+  Jangan `TRUNCATE`/seed-ulang di environment yang sudah transaksi ke gateway tanpa sadar
+  konsekuensinya (untuk charge lama pra-ID-unik, webhook fallback cocokkan `orderNumber`).
+
 - QRIS tanpa `qris.acquirer` (ikut default GoPay Midtrans, object `qris` Optional sesuai docs).
-- `POST /api/public/orders` & `POST /api/orders` otomatis charge Midtrans bila
-  `paymentSettings.<method>.gateway = "midtrans"` (qris/ewallet gopay-shopeepay/VA bca-bni-bri-mandiri-permata-cimb);
+- `POST /api/public/orders` & `POST /api/orders` SELALU charge Midtrans untuk non-cash
+  (qris / VA bca-mandiri-bni-bri); nilai `gateway` lama diabaikan;
+- Metode: `cash|qris|bank_transfer` (e-wallet dihapus). SeaBank TIDAK didukung Core API
+  klasik (hanya via BI-SNAP, di luar scope) — jangan ditambahkan ke allowlist.
+- Mandiri = Bill Payment: wajib `bill_info1/2` (dikirim otomatis, bill_info2 = ID order unik);
+  respons berupa `bill_key` yang dipetakan ke kolom VA di aplikasi.
   `item_details` produk + Service Charge + Tax ikut terkirim (sum == total, kalau tidak cocok di-omit agar charge tetap sukses).
 - `payments.gateway = "midtrans"`, `reference = transaction_id`,
   `gatewayData = { qrUrl, qrString, vaNumber, redirectUrl, raw, lastNotification }`
@@ -340,7 +457,21 @@ Semua endpoint yang butuh login memakai header `Authorization: Bearer <token>`.
 - Tanpa ngrok, pakai `GET /api/public/orders/by-number/:orderNumber/status` untuk poll + auto-sync `paid`.
 - Isi `.env`: `MIDTRANS_SERVER_KEY=SB-Mid-server-...`, `MIDTRANS_IS_PRODUCTION=false` untuk Sandbox.
 
-## 8. Menuju production nanti
+## 8. Backup database (penting!)
+
+Database dev memakai Docker volume (`backend_servopay_db_data`). Berlaku:
+
+- `docker compose down` = aman (data tetap). **`docker compose down -v` / `prune` = DATA HILANG.**
+- `npm run seed` me-`TRUNCATE` semua tabel + restart sequence — hanya untuk dev kosong.
+- Backup sebelum operasi berisiko:
+  ```bash
+  docker exec servopay-db pg_dump -U servopay servopay > backups/servopay-$(date +%F).sql
+  # restore:
+  Get-Content backups/servopay-2026-09-09.sql | docker exec -i servopay-db psql -U servopay -d servopay
+  ```
+- Production: Postgres managed dengan PITR (wajib) — lihat §9.
+
+## 9. Menuju production nanti
 
 1. Sewa Postgres managed (Neon/Railway/RDS/Supabase/dll) atau tetap Docker di VPS.
 2. Ganti `DATABASE_URL` di `.env` production.

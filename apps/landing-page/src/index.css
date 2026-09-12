@@ -1,0 +1,77 @@
+@import 'tailwindcss';
+
+/* Token dari apps/landing-page/reference/DESIGN.md ("Artisanal Precision") */
+@theme {
+  --font-display: 'Syne', system-ui, sans-serif;
+  --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
+
+  --color-surface: #fbf9f6;
+  --color-surface-dim: #dbdad7;
+  --color-surface-bright: #fbf9f6;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #f5f3f0;
+  --color-surface-container: #efeeeb;
+  --color-surface-container-high: #eae8e5;
+  --color-surface-container-highest: #e4e2df;
+  --color-on-surface: #1b1c1a;
+  --color-on-surface-variant: #4e453f;
+  --color-inverse-surface: #30312f;
+  --color-inverse-on-surface: #f2f0ed;
+  --color-outline: #80756f;
+  --color-outline-variant: #d1c4bc;
+  --color-surface-tint: #6c5b50;
+  --color-primary: #000000;
+  --color-on-primary: #ffffff;
+  --color-primary-container: #251911;
+  --color-on-primary-container: #938074;
+  --color-inverse-primary: #d8c2b5;
+  --color-secondary: #885200;
+  --color-on-secondary: #ffffff;
+  --color-secondary-container: #fea93e;
+  --color-on-secondary-container: #6d4100;
+  --color-secondary-fixed: #ffddbb;
+  --color-secondary-fixed-dim: #ffb867;
+  --color-on-secondary-fixed: #2b1700;
+  --color-on-secondary-fixed-variant: #673d00;
+  --color-primary-fixed: #f5ded0;
+  --color-primary-fixed-dim: #d8c2b5;
+  --color-on-primary-fixed: #251911;
+  --color-tertiary-fixed: #ffdbc7;
+  --color-error: #ba1a1a;
+  --color-background: #fbf9f6;
+  --color-on-background: #1b1c1a;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* Naikkan skala dasar di monitor lebar agar tidak terlihat kecil */
+@media (min-width: 1600px) {
+  html {
+    font-size: 17.5px;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: var(--color-surface);
+  color: var(--color-on-surface);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

@@ -16,7 +16,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-
+ 
   # GUI ringan untuk lihat isi database via browser (opsional, tapi berguna untuk testing tanpa frontend)
   adminer:
     image: adminer:latest

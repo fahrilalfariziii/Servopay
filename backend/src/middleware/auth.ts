@@ -30,6 +30,11 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
     return next(AppError.unauthorized("Token tidak valid atau kadaluarsa"));
   }
 
+  // Token platform admin tidak berlaku untuk endpoint tenant (isolasi sesi, PRD §8.2).
+  if (payload.scope === "platform") {
+    return next(AppError.unauthorized("Sesi platform admin tidak berlaku di sini, silakan login akun kafe"));
+  }
+
   try {
     const user = await prisma.user.findUnique({ where: { id: payload.userId } });
     if (!user || !user.active) return next(AppError.unauthorized("Akun tidak aktif"));

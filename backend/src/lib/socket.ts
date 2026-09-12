@@ -101,3 +101,11 @@ export function emitProductAvailabilityUpdate(businessId: number, product: unkno
 export function emitStockUpdate(businessId: number, ingredient: unknown) {
   io?.to(roomFor(businessId)).emit("ingredient:stock_updated", ingredient);
 }
+
+export function emitBusinessCashUpdate(businessId: number, cash: unknown) {
+  io?.to(roomFor(businessId)).emit("business:cash_updated", cash);
+}
+
+export function emitBusinessUpdated(businessId: number, business: unknown) {
+  io?.to(roomFor(businessId)).emit("business:updated", business);
+}

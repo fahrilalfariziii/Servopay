@@ -16,6 +16,14 @@ function getCorsOrigins(): string[] {
 
 export function createApp() {
   const app = express();
+  // Trust proxy: development pakai 1 hop (ngrok), production pakai 1 hop yang aman & terbaik
+  // Di prod, X-Forwarded-For hanya dipercaya dari 1 proxy terdekat (Nginx/Railway) — tidak semua hop.
+  const isProd = process.env.NODE_ENV === 'production';
+  app.set('trust proxy', 1);
+  if (isProd) {
+    // Di production, tetap 1 adalah opsi teraman/terbaik untuk single reverse proxy.
+    // Jika deploy di belakang >1 hop (CDN→LB→App), naikkan ke 2 sesuai infra.
+  }
 
   // Security headers standar
   app.use(helmet());
@@ -35,11 +43,21 @@ export function createApp() {
   app.use("/api/orders", cors({ origin: authOrigins, credentials: true }));
   app.use("/api/ingredients", cors({ origin: authOrigins, credentials: true }));
   app.use("/api/analytics", cors({ origin: authOrigins, credentials: true }));
+  app.use("/api/platform", cors({ origin: authOrigins, credentials: true }));
 
-  app.use(express.json());
+  // Limit 5mb: logo/foto dikirim sebagai dataURL base64 (file 2MB -> ~2.8MB).
+  // Default Express 100kb menolaknya dengan PayloadTooLargeError.
+  app.use(express.json({ limit: "5mb" }));
 
   app.get("/health", (_req, res) => {
-    res.json({ status: "ok", service: "servopay-backend", time: new Date().toISOString() });
+    res.json({
+      status: "ok",
+      service: "ordria-backend",
+      time: new Date().toISOString(),
+      // Probe versi kode yang BERJALAN (bukan di repo): naikkan BUILD saat ubah logika.
+      // Dipakai memastikan restart mengenai proses yang benar (kasus bank salah padahal kode benar).
+      build: "2026-09-10-bank-strict+webhook-ignore+recharge-idempotent",
+    });
   });
 
   app.use("/api", apiRouter);

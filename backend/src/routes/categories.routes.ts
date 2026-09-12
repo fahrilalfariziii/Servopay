@@ -4,6 +4,7 @@ import { prisma } from "../lib/prisma";
 import { AppError } from "../lib/errors";
 import { asyncHandler } from "../middleware/error-handler";
 import { requireAuth, requireRole } from "../middleware/auth";
+import { emitProductAvailabilityUpdate } from "../lib/socket";
 
 export const categoriesRouter = Router();
 categoriesRouter.use(requireAuth);
@@ -35,6 +36,7 @@ categoriesRouter.post(
     const created = await prisma.category.create({
       data: { businessId: req.auth!.businessId, ...data },
     });
+    emitProductAvailabilityUpdate(req.auth!.businessId, { categoriesChanged: true });
     res.status(201).json(created);
   })
 );
@@ -51,6 +53,7 @@ categoriesRouter.put(
     if (!existing) throw AppError.notFound("Kategori tidak ditemukan");
 
     const updated = await prisma.category.update({ where: { id }, data });
+    emitProductAvailabilityUpdate(req.auth!.businessId, { categoriesChanged: true });
     res.json(updated);
   })
 );
@@ -65,6 +68,7 @@ categoriesRouter.delete(
     if (!existing) throw AppError.notFound("Kategori tidak ditemukan");
 
     await prisma.category.delete({ where: { id } });
+    emitProductAvailabilityUpdate(req.auth!.businessId, { categoriesChanged: true });
     res.status(204).send();
   })
 );

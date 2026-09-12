@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma";
 import { AppError } from "../lib/errors";
 import { asyncHandler } from "../middleware/error-handler";
 import { requireAuth, requireRole } from "../middleware/auth";
+import { FEATURES, requireFeature } from "../lib/feature-gate";
 
 export const tablesRouter = Router();
 tablesRouter.use(requireAuth);
@@ -23,14 +24,17 @@ tablesRouter.get(
 
 const createTableSchema = z.object({
   tableNumber: z.string().min(1),
-  area: z.string().optional(),
-  qrConfig: z.record(z.any()).optional(),
+  area: z.string().nullish().transform((v) => v ?? undefined),
+  qrConfig: z.record(z.any()).nullish().transform((v) => v ?? undefined).optional(),
 });
 
 // POST /api/tables — owner only
 tablesRouter.post(
   "/",
   requireRole("owner"),
+  // Tulis meja (tambah/edit/regenerate/hapus) hanya paket >= Pro.
+  // GET list tetap terbuka untuk referensi order manual & cetak QR.
+  requireFeature(FEATURES.TABLE_MANAGEMENT),
   asyncHandler(async (req, res) => {
     const data = createTableSchema.parse(req.body);
     const created = await prisma.cafeTable.create({
@@ -55,6 +59,9 @@ const updateTableSchema = createTableSchema.partial().extend({
 tablesRouter.put(
   "/:id",
   requireRole("owner"),
+  // Tulis meja (tambah/edit/regenerate/hapus) hanya paket >= Pro.
+  // GET list tetap terbuka untuk referensi order manual & cetak QR.
+  requireFeature(FEATURES.TABLE_MANAGEMENT),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const data = updateTableSchema.parse(req.body);
@@ -71,6 +78,9 @@ tablesRouter.put(
 tablesRouter.post(
   "/:id/regenerate-qr",
   requireRole("owner"),
+  // Tulis meja (tambah/edit/regenerate/hapus) hanya paket >= Pro.
+  // GET list tetap terbuka untuk referensi order manual & cetak QR.
+  requireFeature(FEATURES.TABLE_MANAGEMENT),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.cafeTable.findFirst({ where: { id, businessId: req.auth!.businessId } });
@@ -88,6 +98,9 @@ tablesRouter.post(
 tablesRouter.delete(
   "/:id",
   requireRole("owner"),
+  // Tulis meja (tambah/edit/regenerate/hapus) hanya paket >= Pro.
+  // GET list tetap terbuka untuk referensi order manual & cetak QR.
+  requireFeature(FEATURES.TABLE_MANAGEMENT),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.cafeTable.findFirst({ where: { id, businessId: req.auth!.businessId } });

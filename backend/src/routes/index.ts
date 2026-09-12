@@ -9,6 +9,7 @@ import { ordersRouter } from "./orders.routes";
 import { ingredientsRouter } from "./ingredients.routes";
 import { analyticsRouter } from "./analytics.routes";
 import { publicRouter } from "./public.routes";
+import { platformRouter } from "./platform.routes";
 
 export const apiRouter = Router();
 
@@ -25,3 +26,6 @@ apiRouter.use("/products", productsRouter);
 apiRouter.use("/orders", ordersRouter);
 apiRouter.use("/ingredients", ingredientsRouter);
 apiRouter.use("/analytics", analyticsRouter);
+
+// ---- Platform admin internal (login & cookie terpisah dari tenant) ----
+apiRouter.use("/platform", platformRouter);

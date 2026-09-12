@@ -26,7 +26,10 @@ model Business {
   serviceChargeEnabled Boolean  @default(false) @map("service_charge_enabled")
   soundEnabled         Boolean  @default(true) @map("sound_enabled")
   openingCash          Decimal  @default(0) @db.Decimal(14, 2) @map("opening_cash")
+  closingCash          Decimal? @map("closing_cash") @db.Decimal(14, 2) // uang closing shift aktif (null = shift terbuka)
+  cashClosedAt         DateTime? @map("cash_closed_at") // waktu tutup shift terakhir
   qrTemplate           Json?    @map("qr_template")
+  theme                Json?    @map("theme") // kustom tema self-order owner (warna, header, font)
   enabledPaymentMethods Json     @default("[\"cash\", \"qris\"]") @map("enabled_payment_methods")
   paymentSettings       Json?    @default("{}") @map("payment_settings")
   midtransMode          String   @default("global") @map("midtrans_mode") // global | custom
@@ -34,6 +37,13 @@ model Business {
   midtransClientKey     String?  @map("midtrans_client_key")
   midtransQrisAcquirer  String?  @map("midtrans_qris_acquirer") // gopay | airpay_shopee
   status               String   @default("active")
+  // ---- Kolom platform SaaS (Fase 3, docs/prd_SaaS_multitenant.md §7) ----
+  slug                 String?  @unique // identifier unik tenant (URL/subdomain self-order)
+  currentPlanId        Int?     @map("current_plan_id") // denormalisasi paket aktif (lookup cepat feature gate)
+  currentPlan          Plan?    @relation("BusinessCurrentPlan", fields: [currentPlanId], references: [id])
+  onboardedAt          DateTime? @map("onboarded_at")
+  isPlatformSuspended  Boolean  @default(false) @map("is_platform_suspended") // kill-switch platform admin
+  featureOverrides     Json?    @map("feature_overrides") // pengecualian fitur khusus tenant ini, mis. {"selfOrder": true}
   createdAt            DateTime @default(now()) @map("created_at")
   updatedAt            DateTime @updatedAt @map("updated_at")
 
@@ -45,6 +55,9 @@ model Business {
   payments       Payment[]
   ingredients    Ingredient[]
   stockMovements StockMovement[]
+  subscriptions  Subscription[]
+  invoices       Invoice[]
+  auditLogs      PlatformAuditLog[]
 
   @@map("businesses")
 }
@@ -62,6 +75,7 @@ model User {
 
   orders         Order[]
   stockMovements StockMovement[]
+  resetTokens    PasswordResetToken[]
 
   @@map("users")
 }
@@ -230,13 +244,156 @@ model StockMovement {
   ingredientId Int        @map("ingredient_id")
   ingredient   Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
   type         String // in | out | adjustment | waste
-  quantity     Decimal    @db.Decimal(14, 2)
+  quantity     Decimal    @map("quantity") @db.Decimal(14, 2)
   stockBefore  Decimal    @map("stock_before") @db.Decimal(14, 2)
   stockAfter   Decimal    @map("stock_after") @db.Decimal(14, 2)
   notes        String?
+  // Penerimaan supplier (hanya diisi untuk type "in")
+  supplier     String?
+  referenceNo  String?    @map("reference_no") // nomor nota / PO
+  unitCost     Decimal?   @map("unit_cost") @db.Decimal(14, 2) // harga beli per unit (fondasi HPP)
+  batchNo      String?    @map("batch_no")
+  expiryDate   DateTime?  @map("expiry_date")
+  // Penyesuaian (wajib diisi untuk type "adjustment"):
+  // waste_damage | variance_missing | internal_promo | correction
+  reason       String?
   userId       Int?       @map("user_id")
   user         User?      @relation(fields: [userId], references: [id])
   createdAt    DateTime   @default(now()) @map("created_at")
 
   @@map("stock_movements")
+}
+
+// ================= Layer platform SaaS (Fase 3) =================
+// Skema mengikuti docs/prd_SaaS_multitenant.md §7. Skema 12 tabel inti di atas
+// tidak diubah kecuali tambahan kolom di Business.
+
+model Plan {
+  id           Int      @id @default(autoincrement())
+  code         String   @unique // starter | pro | enterprise
+  name         String
+  price        Decimal  @db.Decimal(14, 2)
+  billingCycle String   @default("monthly") @map("billing_cycle") // monthly | yearly | custom
+  featureFlags Json     @default("{}") @map("feature_flags")
+  limits       Json     @default("{}")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  subscriptions    Subscription[]
+  currentBusinesses Business[]     @relation("BusinessCurrentPlan")
+  leads            Lead[]
+
+  @@map("plans")
+}
+
+model Subscription {
+  id                 Int       @id @default(autoincrement())
+  businessId         Int       @map("business_id")
+  business           Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  planId             Int       @map("plan_id")
+  plan               Plan      @relation(fields: [planId], references: [id])
+  status             String    @default("active") // active | past_due | suspended | canceled (TANPA trial)
+  currentPeriodStart DateTime? @map("current_period_start")
+  currentPeriodEnd   DateTime? @map("current_period_end")
+  canceledAt         DateTime? @map("canceled_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  invoices Invoice[]
+
+  @@map("subscriptions")
+}
+
+model Invoice {
+  id             Int          @id @default(autoincrement())
+  businessId     Int          @map("business_id")
+  business       Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  subscriptionId Int?         @map("subscription_id")
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id])
+  invoiceNumber  String       @unique @map("invoice_number")
+  amount         Decimal      @db.Decimal(14, 2)
+  status         String       @default("unpaid") // unpaid | paid | overdue | void
+  periodStart    DateTime?    @map("period_start") @db.Date
+  periodEnd      DateTime?    @map("period_end") @db.Date
+  dueDate        DateTime?    @map("due_date") @db.Date
+  paidAt         DateTime?    @map("paid_at")
+  paidNote       String?      @map("paid_note")
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  @@map("invoices")
+}
+
+model PlatformAdmin {
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         String   @default("support") // superadmin | support
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  auditLogs      PlatformAuditLog[]
+  landingUpdates LandingSection[]   @relation("LandingUpdatedBy")
+
+  @@map("platform_admins")
+}
+
+model PlatformAuditLog {
+  id              Int            @id @default(autoincrement())
+  platformAdminId Int?           @map("platform_admin_id")
+  platformAdmin   PlatformAdmin? @relation(fields: [platformAdminId], references: [id])
+  businessId      Int?           @map("business_id")
+  business        Business?      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  action          String // plan_changed | status_changed | invoice_marked_paid | tenant_created | landing_content_updated | owner_password_reset | feature_override_changed | lead_status_changed
+  before          Json?
+  after           Json?
+  createdAt       DateTime       @default(now()) @map("created_at")
+
+  @@map("platform_audit_logs")
+}
+
+model Lead {
+  id               Int      @id @default(autoincrement())
+  businessName     String   @map("business_name")
+  ownerName        String   @map("owner_name")
+  email            String
+  phone            String?
+  interestedPlanId Int?     @map("interested_plan_id")
+  interestedPlan   Plan?    @relation(fields: [interestedPlanId], references: [id])
+  jobRole          String?  @map("job_role")
+  outletCount      String?  @map("outlet_count")
+  needCategory     String?  @map("need_category")
+  message          String?
+  status           String   @default("new") // new | contacted | onboarded | rejected
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@map("leads")
+}
+
+model LandingSection {
+  id               Int            @id @default(autoincrement())
+  sectionKey       String         @unique @map("section_key") // hero | features | faq | cta | contact
+  content          Json
+  sortOrder        Int            @default(0) @map("sort_order")
+  isPublished      Boolean        @default(true) @map("is_published")
+  updatedByAdminId Int?           @map("updated_by_admin_id")
+  updatedBy        PlatformAdmin? @relation("LandingUpdatedBy", fields: [updatedByAdminId], references: [id])
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  @@map("landing_page_sections")
+}
+
+// Token reset password owner via link email (sekali pakai, kedaluwarsa 1 jam).
+// Yang disimpan hanya hash sha256 token — token asli hanya ada di link email.
+model PasswordResetToken {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("password_reset_tokens")
 }

@@ -3,15 +3,40 @@ import { decrypt } from "../lib/encryption";
 
 export type MidtransChargeResult = {
   transactionId: string;
+  /** ID unik yang dikirim ke Midtrans (orderNumber + suffix). Inilah yang dipakai
+   *  untuk cek status & webhook — BUKAN orderNumber struk yang boleh berulang. */
   orderId: string;
+  /** Nomor struk internal (untuk display/kasir). */
+  orderNumber: string;
   grossAmount: string;
   qrUrl?: string;
   qrString?: string;
   vaNumber?: string;
   vaBank?: string;
+  /** Mandiri e-channel: kode perusahaan (sama utk semua transaksi) + bill key (unik). */
+  billerCode?: string;
   redirectUrl?: string;
   raw: unknown;
 };
+
+/**
+ * Nomor struk (BE-9028) boleh berulang antar seed/attempt, tapi Midtrans menolak
+ * order_id duplikat (QRIS) — walau VA mentoleransinya. Maka setiap charge memakai
+ * ID unik: "<orderNumber>-<base36 timestamp>".
+ */
+export function makeMidtransOrderId(orderNumber: string): string {
+  const suffix = Date.now().toString(36);
+  return `${orderNumber}-${suffix}`;
+}
+
+/** Ambil ID Midtrans yang dipakai saat charge dari payment tersimpan. */
+export function midtransOrderIdFromPayments(
+  payments: Array<{ gatewayData?: unknown }> | undefined,
+  fallbackOrderNumber: string
+): string {
+  const gd = payments?.[0]?.gatewayData as { orderId?: string } | undefined;
+  return typeof gd?.orderId === "string" && gd.orderId.length > 0 ? gd.orderId : fallbackOrderNumber;
+}
 
 function getMidtransConfigForBusiness(business: {
   midtransMode?: string | null;
@@ -117,57 +142,71 @@ function sanitizedItemDetails(
 
 export async function createMidtransChargeForMethod(params: {
   business: Parameters<typeof getMidtransConfigForBusiness>[0];
-  method: "qris" | "ewallet" | "bank_transfer";
+  method: "qris" | "bank_transfer";
   orderNumber: string;
   grossAmount: number;
   customerName?: string | null;
-  paymentSettings?: Record<string, { acquirer?: string; bank?: string; channel?: string; wallets?: string[] }>;
+  paymentSettings?: Record<string, { acquirer?: string; bank?: string; allowedBanks?: string[] }>;
+  selectedBank?: string;
   itemDetails?: MidtransItemDetail[];
 }): Promise<MidtransChargeResult | null> {
   const cfg = getMidtransConfigForBusiness(params.business);
   if (!cfg) return null;
 
   const ps = params.paymentSettings || {};
+  const midtransOrderId = makeMidtransOrderId(params.orderNumber);
   const item_details = sanitizedItemDetails(params.itemDetails, params.grossAmount);
   if (params.method === "qris") {
     // Acquirer opsional — Midtrans default gopay. Jangan kirim field qris sama sekali
     // agar ikut default Midtrans (sesuai docs: qris object Optional).
     return chargeWithBody(cfg, {
       payment_type: "qris",
-      transaction_details: { order_id: params.orderNumber, gross_amount: params.grossAmount },
+      transaction_details: { order_id: midtransOrderId, gross_amount: params.grossAmount },
       customer_details: { first_name: params.customerName || "Tamu" },
       ...(item_details ? { item_details } : {}),
-    });
-  }
-  if (params.method === "ewallet") {
-    // Gopay / Shopeepay via Core API
-    const channel = (ps.ewallet?.channel as string) || (ps.ewallet?.wallets as string[])?.[0] || "gopay";
-    if (channel === "shopeepay") {
-      return chargeWithBody(cfg, {
-        payment_type: "shopeepay",
-        transaction_details: { order_id: params.orderNumber, gross_amount: params.grossAmount },
-        customer_details: { first_name: params.customerName || "Tamu" },
-        ...(item_details ? { item_details } : {}),
-        shopeepay: { callback_url: process.env.MIDTRANS_NOTIFICATION_URL || "" },
-      });
-    }
-    return chargeWithBody(cfg, {
-      payment_type: "gopay",
-      transaction_details: { order_id: params.orderNumber, gross_amount: params.grossAmount },
-      customer_details: { first_name: params.customerName || "Tamu" },
-      ...(item_details ? { item_details } : {}),
-      gopay: { enable_callback: true, callback_url: process.env.MIDTRANS_NOTIFICATION_URL || "" },
-    });
+    }, params.orderNumber);
   }
   if (params.method === "bank_transfer") {
-    const bank = (ps.bank_transfer?.bank as string) || "bni";
+    // Bank yang didukung Core API klasik — JANGAN tambah di luar ini (SeaBank hanya via BI-SNAP).
+    // Nilai basi (permata/cimb/dll) dari pengaturan lama disaring, bukan dipakai.
+    const SUPPORTED_BANKS = ["bca", "mandiri", "bni", "bri"] as const;
+    const stored = (ps.bank_transfer as { allowedBanks?: string[]; bank?: string } | undefined);
+    const allowed = ((stored?.allowedBanks ?? (stored?.bank ? [stored.bank] : undefined)) ?? [])
+      .filter((b): b is (typeof SUPPORTED_BANKS)[number] => (SUPPORTED_BANKS as readonly string[]).includes(b));
+    const requested = params.selectedBank || stored?.bank || "bca";
+    if (!(SUPPORTED_BANKS as readonly string[]).includes(requested)) {
+      throw new Error(`Bank "${requested}" tidak didukung. Pilih: BCA, Mandiri, BNI, BRI.`);
+    }
+    // Pilihan pelanggan adalah kebenaran — TIDAK boleh disubstitusi diam-diam ke bank lain.
+    // Dulu: fallback allowed[0] menyebabkan charge Permata padahal pelanggan pilih Mandiri.
+    if (allowed.length > 0 && !allowed.includes(requested as (typeof SUPPORTED_BANKS)[number])) {
+      throw new Error(`Bank "${requested.toUpperCase()}" tidak aktif. Pilih bank lain yang tersedia.`);
+    }
+    const bank = requested;
+    // MANDIRI = Bill Payment via jalur "echannel" (BUKAN bank_transfer) sesuai docs Midtrans:
+    // payment_type "echannel" + objek echannel{bill_info1, bill_info2}.
+    // Mengirim mandiri lewat bank_transfer menghasilkan perilaku tak terdefinisi
+    // (Sandbox pernah membalas Permata) — jangan pernah lakukan itu lagi.
+    if (bank === "mandiri") {
+      return chargeWithBody(cfg, {
+        payment_type: "echannel",
+        transaction_details: { order_id: midtransOrderId, gross_amount: params.grossAmount },
+        customer_details: { first_name: params.customerName || "Tamu" },
+        echannel: {
+          bill_info1: "PEMBAYARAN",
+          bill_info2: midtransOrderId.slice(-30),
+        },
+        ...(item_details ? { item_details } : {}),
+      }, params.orderNumber);
+    }
+    // BCA, BNI, BRI: Virtual Account klasik.
     return chargeWithBody(cfg, {
       payment_type: "bank_transfer",
-      transaction_details: { order_id: params.orderNumber, gross_amount: params.grossAmount },
+      transaction_details: { order_id: midtransOrderId, gross_amount: params.grossAmount },
       customer_details: { first_name: params.customerName || "Tamu" },
-      ...(item_details ? { item_details } : {}),
       bank_transfer: { bank },
-    });
+      ...(item_details ? { item_details } : {}),
+    }, params.orderNumber);
   }
   return null;
 }
@@ -182,15 +221,16 @@ async function createQrisWithConfig(
   // Jangan kirim qris.acquirer — ikut default Midtrans (gopay).
   return chargeWithBody(cfg, {
     payment_type: "qris",
-    transaction_details: { order_id: orderNumber, gross_amount: grossAmount },
+    transaction_details: { order_id: makeMidtransOrderId(orderNumber), gross_amount: grossAmount },
     customer_details: { first_name: customerName || "Tamu" },
     ...(itemDetails ? { item_details: itemDetails } : {}),
-  });
+  }, orderNumber);
 }
 
 async function chargeWithBody(
   cfg: { serverKey: string; isProduction: boolean },
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  orderNumber: string
 ): Promise<MidtransChargeResult> {
   const url = `${midtransBaseUrl(cfg.isProduction)}/v2/charge`;
   const auth = Buffer.from(`${cfg.serverKey}:`).toString("base64");
@@ -202,8 +242,20 @@ async function chargeWithBody(
   const notif = notificationUrl();
   if (notif) headers["X-Override-Notification"] = notif;
 
-  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
-  const data = (await res.json()) as Record<string, unknown>;
+  // Log operasional permanen (tanpa secret): pasangan minta-vs-balas adalah
+  // satu-satunya vonis saat bank hasil beda dari bank yang diminta.
+  const txDetails = body.transaction_details as { order_id?: string; gross_amount?: number } | undefined;
+  const bankReq = (body.bank_transfer as { bank?: string } | undefined)?.bank
+    ?? ((body.echannel as Record<string, unknown> | undefined) ? "mandiri(echannel)" : String(body.payment_type ?? "?"));
+  console.log(`[Midtrans charge] req payment_type=${body.payment_type} bank=${bankReq} order_id=${txDetails?.order_id} gross=${txDetails?.gross_amount}`);
+
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+  } catch (e) {
+    throw new Error(`Midtrans network error: ${(e as Error).message}`);
+  }
+  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   
   if (!res.ok) {
     const msg = (data.status_message as string) || `Midtrans charge failed ${res.status}`;
@@ -222,11 +274,18 @@ async function chargeWithBody(
   const qrUrl = actions.find((a) => a.name === "generate-qr-code-v2")?.url || actions.find((a) => a.name === "generate-qr-code")?.url;
   const qrString = data.qr_string as string | undefined;
   const vaNumbers = data.va_numbers as { bank: string; va_number: string }[] | undefined;
-  const vaNumber = vaNumbers?.[0]?.va_number;
-  const vaBank = vaNumbers?.[0]?.bank;
+  // Format nomor berbeda per bank — baca semuanya agar tidak ada yang hilang misterius:
+  // BCA/BNI/BRI/CIMB -> va_numbers[0]; Permata -> permata_va_number top-level;
+  // Mandiri bill -> bill_key (+biller_code bila ada).
+  const permataVa = data.permata_va_number as string | undefined;
+  const billKey = data.bill_key as string | undefined;
+  const billerCode = data.biller_code as string | undefined;
+  const vaNumber = vaNumbers?.[0]?.va_number ?? permataVa ?? billKey;
+  const vaBank = vaNumbers?.[0]?.bank ?? (permataVa ? "permata" : billKey ? "mandiri" : undefined);
   const redirectUrl = (data.redirect_url as string) || (actions.find((a) => a.name === "deeplink-redirect")?.url);
+  console.log(`[Midtrans charge] res order_id=${orderId} vaBank=${vaBank ?? "-"} va=${vaNumber ? "***" + String(vaNumber).slice(-4) : "-"} qr=${qrUrl ? "yes" : "no"}`);
 
-  return { transactionId, orderId, grossAmount, qrUrl, qrString, vaNumber, vaBank, redirectUrl, raw: data };
+  return { transactionId, orderId, orderNumber, grossAmount, qrUrl, qrString, vaNumber, vaBank, billerCode, redirectUrl, raw: data };
 }
 
 export function verifyMidtransSignature(payload: {
@@ -259,7 +318,12 @@ export async function getMidtransTransactionStatus(
   if (!cfg) return null;
   const url = `${midtransBaseUrl(cfg.isProduction)}/v2/${encodeURIComponent(orderId)}/status`;
   const auth = Buffer.from(`${cfg.serverKey}:`).toString("base64");
-  const res = await fetch(url, { headers: { Accept: "application/json", Authorization: `Basic ${auth}` } });
-  if (!res.ok) return null;
-  return (await res.json()) as Record<string, unknown>;
+  try {
+    const res = await fetch(url, { headers: { Accept: "application/json", Authorization: `Basic ${auth}` } });
+    if (!res.ok) return null;
+    return (await res.json()) as Record<string, unknown>;
+  } catch (e) {
+    console.warn(`[Midtrans status] network error for ${orderId}:`, (e as Error).message);
+    return null;
+  }
 }

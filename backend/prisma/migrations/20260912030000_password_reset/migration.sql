@@ -1,0 +1,1 @@
+-- Applied empty during recovery; real table created in next migration.

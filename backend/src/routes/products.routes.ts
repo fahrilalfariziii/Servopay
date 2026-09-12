@@ -4,7 +4,7 @@ import { prisma } from "../lib/prisma";
 import { AppError } from "../lib/errors";
 import { asyncHandler } from "../middleware/error-handler";
 import { requireAuth, requireRole } from "../middleware/auth";
-import { emitProductAvailabilityUpdate } from "../lib/socket";
+import { emitBusinessUpdated, emitProductAvailabilityUpdate } from "../lib/socket";
 
 export const productsRouter = Router();
 productsRouter.use(requireAuth);
@@ -22,14 +22,19 @@ productsRouter.get(
   })
 );
 
+// Field opsional diperlakukan "null = tidak diubah" (FE lama/seed bisa kirim null
+// dari kolom DB yang nullable) — bukan 400.
+const nullishString = z.string().nullish().transform((v) => v ?? undefined);
+const nullishNumber = (min: number) => z.coerce.number().min(min).nullish().transform((v) => v ?? undefined);
+
 const productSchema = z.object({
-  categoryId: z.number().int(),
+  categoryId: z.coerce.number().int(),
   name: z.string().min(1),
-  description: z.string().optional(),
-  price: z.number().min(0),
-  hpp: z.number().min(0).optional(),
-  imageUrl: z.string().optional(),
-  badge: z.string().optional(),
+  description: nullishString,
+  price: z.coerce.number().min(0),
+  hpp: nullishNumber(0),
+  imageUrl: nullishString,
+  badge: nullishString,
   isAvailable: z.boolean().optional(),
 });
 
@@ -49,6 +54,7 @@ productsRouter.post(
       data: { businessId: req.auth!.businessId, ...data },
       include: { options: true },
     });
+    emitProductAvailabilityUpdate(req.auth!.businessId, created);
     res.status(201).json(created);
   })
 );
@@ -65,6 +71,7 @@ productsRouter.put(
     if (!existing) throw AppError.notFound("Produk tidak ditemukan");
 
     const updated = await prisma.product.update({ where: { id }, data, include: { options: true } });
+    emitProductAvailabilityUpdate(req.auth!.businessId, updated);
     res.json(updated);
   })
 );
@@ -95,6 +102,7 @@ productsRouter.delete(
     if (!existing) throw AppError.notFound("Produk tidak ditemukan");
 
     await prisma.product.delete({ where: { id } });
+    emitProductAvailabilityUpdate(req.auth!.businessId, { id, deleted: true });
     res.status(204).send();
   })
 );
@@ -104,7 +112,7 @@ productsRouter.delete(
 const optionSchema = z.object({
   name: z.string().min(1),
   type: z.enum(["temperature", "sugar", "ice", "milk", "addon"]),
-  price: z.number().min(0).default(0),
+  price: z.coerce.number().min(0).default(0),
   isRequired: z.boolean().optional(),
   isActive: z.boolean().optional(),
 });
@@ -123,6 +131,7 @@ productsRouter.post(
     if (!product) throw AppError.notFound("Produk tidak ditemukan");
 
     const created = await prisma.productOption.create({ data: { productId, ...data } });
+    emitProductAvailabilityUpdate(req.auth!.businessId, { productId, optionsChanged: true });
     res.status(201).json(created);
   })
 );
@@ -142,6 +151,7 @@ productsRouter.put(
     if (!option) throw AppError.notFound("Opsi tidak ditemukan");
 
     const updated = await prisma.productOption.update({ where: { id: optionId }, data });
+    emitProductAvailabilityUpdate(req.auth!.businessId, { productId, optionsChanged: true });
     res.json(updated);
   })
 );
@@ -160,6 +170,7 @@ productsRouter.delete(
     if (!option) throw AppError.notFound("Opsi tidak ditemukan");
 
     await prisma.productOption.delete({ where: { id: optionId } });
+    emitProductAvailabilityUpdate(req.auth!.businessId, { productId, optionsChanged: true });
     res.status(204).send();
   })
 );

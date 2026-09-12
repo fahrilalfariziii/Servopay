@@ -6,7 +6,12 @@ Aplikasi ini bertujuan untuk mendigitalkan dan menyederhanakan proses pemesanan 
 
 Sistem dirancang sebagai **Web App** dengan tiga area utama, yaitu **Halaman Pemesanan Pelanggan (Self-Ordering App)**, **Halaman Frontoffice (Kasir / Barista)** — sebelumnya disebut Point Of Sale (POS), dan **Halaman BackOffice (Owner — Analytics & Management)**. Fokus utama sistem adalah mempercepat proses pemesanan, mengurangi kesalahan input manual, menyediakan status pesanan secara real-time, dan memberikan owner data penjualan yang mudah dipantau.
 
-> **Catatan As-Built 2026-09-04 (Fase 1 — Frontoffice/Backoffice Mock):** Landing page dihapus, `"/"` kini `RootRedirect` ke `/login` atau role-based (`owner→/backoffice/dashboard`, `kasir/barista→/frontoffice/orders`) di `frontend/src/App.tsx:27`. Auth email+password auto-detect role tanpa dropdown (`LoginPage.tsx:9`, `store.tsx:52`). `Business` diperkaya `logoUrl, taxEnabled/taxLabel/taxRate/taxBearer, serviceChargeEnabled/Rate, soundEnabled, openingCash, qrTemplate` (`shared/types/index.ts:11`, `mock/data.ts:47`). `Order` simpan `serviceCharge/tax/taxLabel/taxBearer` dengan rumus `service=subtotal*rate, taxBase=subtotal+service, tax=taxBase*rate (jika taxEnabled), total= subtotal+service + (bearer===cafe?0:tax)` (`store.tsx:109`). Route lama `/pos/*` → `/frontoffice/*` dan `/owner/*` → `/backoffice/*` via alias legacy. Schema 12 tabel PRD dipertahankan, field baru didokumentasikan di §6.
+> **Catatan As-Built 2026-09-04 (Fase 1 — Frontoffice/Backoffice Mock):** [...] Schema 12 tabel PRD dipertahankan, field baru didokumentasikan di §6.
+>
+> **Catatan As-Built Fase 2 — Integrasi FE↔BE:** status lengkap di §10. Ringkasnya: auth JWT +
+> Socket.io realtime + Midtrans 4 metode + manual record-only + inventory receive/adjustment +
+> shift kas + printer BT/USB + tema self-order + grafik recharts real + kolom DB baru
+> (`closing_cash, cash_closed_at, theme`, `stock_movements`: supplier/nota/harga/batch/expired/reason).
 
 ## 2. Requirements
 
@@ -373,7 +378,10 @@ erDiagram
         boolean service_charge_enabled
         boolean sound_enabled
         decimal opening_cash
+        decimal closing_cash
+        datetime cash_closed_at
         json qr_template
+        json theme
         string status
         datetime created_at
         datetime updated_at
@@ -502,6 +510,12 @@ erDiagram
         decimal stock_before
         decimal stock_after
         string notes
+        string supplier
+        string reference_no
+        decimal unit_cost
+        string batch_no
+        datetime expiry_date
+        string reason
         int user_id FK
         datetime created_at
     }
@@ -604,6 +618,8 @@ Data yang dicatat:
 - catatan.
 - user yang melakukan.
 - waktu perubahan.
+- (Fase 2) penerimaan: supplier, nomor nota/PO (`reference_no`), harga beli (`unit_cost`, fondasi HPP), batch, expired.
+- (Fase 2) adjustment: `reason` wajib (`waste_damage|variance_missing|internal_promo|correction`).
 
 ### Offline Data & Synchronization
 
@@ -791,13 +807,42 @@ Bagian ini mengatur batasan teknis dan panduan desain yang harus dipatuhi tanpa 
 
 **Build:** `tsc -b && vite build` OK (61 modules, 426kB). Lint `oxlint` hanya warning `set-state-in-effect` di `CafeSettingsPage/TaxSettingsPage` (expected).
 
-## 9. Roadmap Fase 2 Backend (Deferred)
+## 9. Roadmap Fase 2 Backend (✅ Selesai — lihat §10)
 
-1. **Backend & DB:** Postgres/Supabase 12 tabel PRD dengan `business_id` per entity + field baru `logo_url, tax_enabled, tax_bearer, service_charge, sound_enabled, opening_cash, qr_template, hpp, qr_config`, seed `biz-1`.
-2. **Auth Backend:** `password_hash` + JWT + hash bcrypt, `RequireAuth` terhubung backend, role `owner|kasir|barista` (mock `password` plain → hash).
-3. **Realtime:** Supabase Realtime/WebSocket untuk order & status, notifikasi suara `soundEnabled` di `OrdersPage` (mock toggle sudah ada).
-4. **Offline:** IndexedDB (`pending_orders`, `pending_stock_movements`, `sync_queue`), Service Worker/PWA, retry + idempotency server (mock `syncNow` 800ms + `clientOrderId`/`syncStatus` sudah ada).
-5. **Printer:** Web Bluetooth/USB/LAN ESC/POS beneran di `Frontoffice → Perangkat` (`PosSettingsPage` mock `bluetooth|usb|lan` sudah ada).
-6. **Payment:** Verifikasi QRIS via gateway webhook (Midtrans/Xendit) bila dibutuhkan, tetap pertahankan Cash/QRIS manual untuk MVP.
-7. **Analytics:** Agregasi real backend per hari/minggu/bulan (ganti chart statis `DashboardPage` `FALLBACK_DAYS` & `SalesOmset` mock `chartData`).
-8. **SaaS:** Tambah `business_id` di `shared/types` + scoping query, tetap single-tenant UI (schema sudah `business_id` ready).
+1. **Backend & DB:** ✅ Postgres + Prisma 12 tabel dengan `business_id` + `closing_cash, cash_closed_at, theme, stock_movements(supplier/reference_no/unit_cost/batch_no/expiry_date/reason)`; seed `TRUNCATE RESTART IDENTITY`.
+2. **Auth Backend:** ✅ `password_hash` + JWT (httpOnly cookie + Bearer, refresh 7 hari) + `requireAuth` cek DB per request + role guard; `PATCH /auth/password` self-service; FE `isHydrating` guard (refresh ≠ logout), kotak demo dihapus dari login.
+3. **Realtime:** ✅ Socket.io per-room `business:<id>` — join pelanggan via `qrToken`; event `order:new/status_updated/payment_updated`, `product:availability_updated` (CRUD produk/kategori/opsi), `ingredient:stock_updated`, `business:cash_updated`, `business:updated`; beep Web Audio ±3,5 dtk + toast + title flash + notif browser opt-in.
+4. **Offline:** IndexedDB/Service Worker tetap deferred; yang ada: idempotency `clientOrderId` server-side, fallback lokal eksplisit, polling stop-on-stale (404: 2x, network: 5x) + jeda saat tab hidden.
+5. **Printer:** ✅ Web Bluetooth/USB ESC/POS 58mm real (`lib/printer.ts` + pola tes + persist per perangkat); LAN = simulasi berlabel, proxy backend deferred.
+6. **Payment:** ✅ Midtrans 4 metode + ID unik per charge (`<order>-<base36>`, QRIS anti-duplikat) + webhook 2-lapis + `recharge` + manual `recordOnly` + tendered/change; status non-cash hanya via webhook/polling.
+7. **Analytics:** ✅ Agregasi real client-side dari order BE (`shared/lib/sales.ts`, sumber tunggal) + recharts (line/bar/donut); endpoint `/analytics` BE tetap tersedia.
+8. **SaaS:** tetap single-tenant UI; fondasi `business_id` dipertahankan.
+
+## 10. Status Implementasi — Fase 2: Integrasi FE↔BE (2026-09)
+
+> As-built terintegrasi. FE (`CafeProvider` BE-first + fallback lokal ber-banner) ↔ BE (REST + Socket.io) ↔ Postgres.
+> Aturan lintas lapis: error API jujur (detail `fieldErrors` Zod masuk toast), `null` DB dinormalisasi
+> sebelum kirim, angka toleran (`z.coerce`), body JSON 5mb (foto dataURL), validasi ID basi di FE.
+
+| # | Fitur | Status | File Referensi |
+|---|-------|--------|----------------|
+| 1 | Auth JWT + refresh + guard hydrate + hapus kredensial demo dari UI | ✅ | `backend/routes/auth.routes.ts` (`login/me/refresh/logout/password`), `RequireAuth.tsx` (`isHydrating`), `LoginPage.tsx` |
+| 2 | Self-order: katalog/BE resolve + validasi meja server + riwayat per sesi (nama+meja) + tombol Selesai | ✅ | `SelfOrderApp.tsx` (restore/upsert, owner badge, screen `history`) |
+| 3 | Checkout Midtrans unik-ID + QR besar/zoom/download + recharge + polling jujur; metode `cash\|qris\|bank_transfer` (e-wallet dihapus), VA BCA/Mandiri(bill)/BNI/BRI (SeaBank hanya via SNAP — di luar scope) | ✅ | `midtrans.service.ts` (`makeMidtransOrderId`), `public.routes.ts` (`recharge`, webhook fallback), `PaymentScreen.tsx` |
+| 4 | Live Orders: suara + toast + Tandai Lunas khusus cash + panel menunggu + filter riwayat hari/jam/nama | ✅ | `OrdersPage.tsx`, `lib/sound.ts` |
+| 5 | Manual record-only + nama & tendered wajib + tetap di halaman + beep 1 dtk | ✅ | `orders.routes.ts` (`recordOnly`), `ManualOrderPage.tsx` |
+| 6 | Menu availability: popup konfirmasi + peringatan stok bahan (heuristik tahap 1) | ✅ | `CatalogPage.tsx` |
+| 7 | Inventory 2 tab Receive/Adjustment + procurement + reason + auto-flip status + semua role | ✅ | `InventoryPage.tsx`, `ingredients.routes.ts` |
+| 8 | Modal kas: opening/expected/closing/selisih + tutup/buka shift (persist server) | ✅ | `business.routes.ts` (`cash-settings`), `PosSettingsPage.tsx` (cash) |
+| 9 | Perangkat: Bluetooth/USB real + pola tes + LAN simulasi berlabel + notif browser opt-in | ✅ | `lib/printer.ts`, `PosSettingsPage.tsx` (device) |
+| 10 | Owner refresh terpusat + CRUD menu/kategori/varian/meja/staff persist + no-duplikat (`isNew`) | ✅ | `OwnerLayout.tsx`, `mock/store.tsx` |
+| 11 | Grafik recharts real (dashboard/omset/sales-type/performa) + riwayat paginasi | ✅ | `shared/lib/sales.ts`, `DashboardPage`, `Sales*Page` |
+| 12 | Menu drawer + foto upload/URL + HEIC→JPEG + null-normalisasi | ✅ | `MenuCatalogPage.tsx`, `lib/image.ts` (heic2any lazy) |
+| 13 | Meja: QR token server + regenerate + salin-link + grid tombol | ✅ | `TablesPage.tsx` |
+| 14 | Settings: profil editable + password server + bisnis/pajak/payment async + tema | ✅ | `settings/*.tsx`, `staff.routes.ts` (email), `business.routes.ts` (theme) |
+| 15 | Tema self-order: preset + custom + preview HP + sinkron socket | ✅ | `ThemeSettingsPage.tsx` (di tab Profile Bisnis), `MenuScreen.tsx` dkk, `normalizeTheme` |
+| 16 | Keamanan: token basi dibuang + mode lokal eksplisit + hint relogin 403 | ✅ | `mock/store.tsx` (`authMode`), `lib/api.ts` |
+| 17 | Operasional: migrasi procurement/closing/theme + backup `pg_dump` + larangan `down -v` | ✅ | `backend/README.md` §8, `prisma/migrations/` |
+
+**Build:** `tsc -b && vite build` FE lolos; `tsc --noEmit` BE lolos. Kredensial seed dev tetap di repo (sengaja, dev-only);
+redaksi/hardening penuh dijadwalkan menuju production (lihat `backend/README.md` §9).

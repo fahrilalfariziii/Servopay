@@ -15,7 +15,7 @@ export interface CreateOrderItemInput {
   selectedOptionIds?: number[];
 }
 
-export type PaymentMethodInput = "cash" | "qris" | "ewallet" | "bank_transfer";
+export type PaymentMethodInput = "cash" | "qris" | "bank_transfer";
 
 export interface CreateOrderInput {
   businessId: number;
@@ -183,7 +183,7 @@ export async function createOrder(input: CreateOrderInput) {
   throw lastError instanceof Error ? lastError : AppError.conflict("Gagal membuat nomor order unik");
 }
 
-const VALID_STATUSES = ["diterima", "diproses", "siap", "selesai"] as const;
+const VALID_STATUSES = ["diterima", "diproses", "siap", "selesai", "batal"] as const;
 
 export async function updateOrderStatus(
   businessId: number,
@@ -196,6 +196,10 @@ export async function updateOrderStatus(
 
   const order = await prisma.order.findFirst({ where: { id: orderId, businessId } });
   if (!order) throw AppError.notFound("Order tidak ditemukan");
+  // Order batal bersifat final — tidak bisa dihidupkan kembali ke alur normal.
+  if (order.status === "batal" && status !== "batal") {
+    throw AppError.badRequest("Order yang dibatalkan tidak bisa diubah statusnya lagi");
+  }
 
   const updated = await prisma.order.update({
     where: { id: orderId },
@@ -208,6 +212,21 @@ export async function updateOrderStatus(
 
   emitOrderStatusUpdate(businessId, updated);
   return updated;
+}
+
+// Batalkan order (kasir/barista/owner). Hanya untuk order yang belum lunas &
+// belum selesai — pembayaran yang sudah masuk tidak bisa dibatalkan dari sini
+// (refund manual di luar sistem). Dipakai tombol Batal POS + auto-batal saat
+// pembayaran gateway gagal/expired.
+export async function cancelOrder(businessId: number, orderId: number) {
+  const order = await prisma.order.findFirst({ where: { id: orderId, businessId } });
+  if (!order) throw AppError.notFound("Order tidak ditemukan");
+  if (order.status === "batal") throw AppError.badRequest("Order sudah dibatalkan");
+  if (order.status === "selesai") throw AppError.badRequest("Order yang sudah selesai tidak bisa dibatalkan");
+  if (order.paymentStatus === "paid") {
+    throw AppError.badRequest("Order yang sudah lunas tidak bisa dibatalkan");
+  }
+  return updateOrderStatus(businessId, orderId, "batal");
 }
 
 export async function markOrderPaid(
@@ -226,7 +245,7 @@ export async function markOrderPaid(
   }
   if (order.paymentMethod !== "cash" && !opts?.allowNonCash) {
     throw AppError.badRequest(
-      "Pembayaran non-tunai (qris/ewallet/bank_transfer) hanya bisa dilunasi via Midtrans (webhook /public/midtrans/notification atau poll /public/orders/by-client/:clientOrderId/status), bukan manual."
+      "Pembayaran non-tunai (qris/bank_transfer) hanya bisa dilunasi via Midtrans (webhook /public/midtrans/notification atau poll /public/orders/by-client/:clientOrderId/status), bukan manual."
     );
   }
 

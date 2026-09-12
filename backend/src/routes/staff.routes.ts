@@ -57,6 +57,7 @@ staffRouter.post(
 
 const updateStaffSchema = z.object({
   name: z.string().min(1).optional(),
+  email: z.string().email().optional(),
   role: z.enum(["owner", "kasir", "barista"]).optional(),
   active: z.boolean().optional(),
   password: z
@@ -77,10 +78,16 @@ staffRouter.put(
     const existing = await prisma.user.findFirst({ where: { id, businessId: req.auth!.businessId } });
     if (!existing) throw AppError.notFound("Staff tidak ditemukan");
 
+    if (data.email && data.email.toLowerCase() !== existing.email.toLowerCase()) {
+      const clash = await prisma.user.findUnique({ where: { email: data.email } });
+      if (clash) throw AppError.badRequest("Email sudah dipakai akun lain");
+    }
+
     const updated = await prisma.user.update({
       where: { id },
       data: {
         name: data.name,
+        email: data.email,
         role: data.role,
         active: data.active,
         passwordHash: data.password ? await hashPassword(data.password) : undefined,

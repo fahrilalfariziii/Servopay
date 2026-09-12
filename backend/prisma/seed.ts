@@ -9,19 +9,12 @@ async function hash(pw: string) {
 
 async function main() {
   console.log("Seeding database (data mengikuti frontend/src/mock/data.ts)...");
-  // Bersihkan data lama agar seed idempoten (urutan FK-aware)
-  await prisma.orderStatusLog.deleteMany();
-  await prisma.stockMovement.deleteMany();
-  await prisma.payment.deleteMany();
-  await prisma.orderItem.deleteMany();
-  await prisma.order.deleteMany();
-  await prisma.productOption.deleteMany();
-  await prisma.product.deleteMany();
-  await prisma.category.deleteMany();
-  await prisma.cafeTable.deleteMany();
-  await prisma.ingredient.deleteMany();
-  await prisma.user.deleteMany();
-  await prisma.business.deleteMany();
+  // TRUNCATE + RESTART IDENTITY agar ID kembali 1..N setiap seed.
+  // deleteMany() saja tidak mereset sequence Postgres -> ID drift (8..14, dst)
+  // sehingga FE yang pegang ID lama kena 404 "Produk tidak ditemukan".
+  await prisma.$executeRawUnsafe(
+    `TRUNCATE "order_status_logs","stock_movements","payments","order_items","orders","product_options","products","categories","tables","ingredients","users","platform_audit_logs","invoices","subscriptions","leads","landing_page_sections","platform_admins","plans","businesses" RESTART IDENTITY CASCADE`
+  );
 
   // ---- Business ----
   const business = await prisma.business.create({
@@ -39,12 +32,11 @@ async function main() {
       serviceChargeRate: 5, // persen
       soundEnabled: true,
       openingCash: 0,
-      enabledPaymentMethods: ["cash", "qris", "ewallet", "bank_transfer"],
+      enabledPaymentMethods: ["cash", "qris", "bank_transfer"],
       paymentSettings: {
-        cash: { instruction: "Bayar tunai di kasir", gateway: "manual" },
-        qris: { instruction: "QRIS dinamis Midtrans", gateway: "midtrans" },
-        ewallet: { instruction: "GoPay/ShopeePay Midtrans", gateway: "midtrans", channel: "gopay" },
-        bank_transfer: { instruction: "VA Midtrans", gateway: "midtrans", bank: "bca" },
+        cash: { gateway: "manual" },
+        qris: { gateway: "midtrans" },
+        bank_transfer: { gateway: "midtrans", bank: "bca", allowedBanks: ["bca", "mandiri", "bni", "bri"] },
       },
       midtransMode: "global",
       midtransQrisAcquirer: null,
@@ -342,6 +334,151 @@ async function main() {
   console.log(`Business ID   : ${business.id}`);
   console.log(`QR token meja : ${tableDefs.map((t) => t.qrToken).join(", ")}`);
   console.log(`Contoh order  : ${order1.orderNumber}, ${order2.orderNumber}`);
+  console.log("----------------------------------------------------");
+
+  // ================= Layer platform SaaS (Fase 3) =================
+  // Paket dari sumber tunggal backend/src/lib/plans.ts agar konsisten dengan
+  // fallback statis GET /api/public/plans.
+  const { PLANS } = await import("../src/lib/plans");
+  const seededPlans = await Promise.all(
+    PLANS.map((p) =>
+      prisma.plan.create({
+        data: {
+          code: p.code,
+          name: p.name,
+          price: p.price,
+          billingCycle: p.billingCycle,
+          featureFlags: p.featureFlags as object,
+          limits: p.limits as object,
+        },
+      })
+    )
+  );
+  const proPlan = seededPlans.find((p) => p.code === "pro")!;
+
+  // Bean & Brew jadi tenant aktif paket Pro sejak seed.
+  await prisma.business.update({
+    where: { id: business.id },
+    data: { slug: "bean-brew", currentPlanId: proPlan.id, onboardedAt: new Date(), status: "active" },
+  });
+  await prisma.subscription.create({
+    data: { businessId: business.id, planId: proPlan.id, status: "active", currentPeriodStart: new Date() },
+  });
+
+  // Akun platform admin (POST /api/platform/auth/login) — terpisah dari staff tenant.
+  await prisma.platformAdmin.createMany({
+    data: [
+      { name: "Super Admin", email: "admin@ordria.id", passwordHash: await hash("Admin123!"), role: "superadmin" },
+      { name: "Support", email: "support@ordria.id", passwordHash: await hash("Support123!"), role: "support" },
+    ],
+  });
+
+  // Konten default landing (CMS) — copy awal, bisa diubah dari Platform Admin.
+  await prisma.landingSection.createMany({
+    data: [
+      {
+        sectionKey: "hero",
+        content: {
+          badge: "Platform SaaS POS & Self-Order Multi-Tenant",
+          title: "Sistem Kasir & Pemesanan Terpadu untuk Coffee Shop Modern.",
+          subtitle:
+            "Self-order QR meja tanpa unduh aplikasi, feed order real-time untuk kasir/barista, manajemen stok, dan analitik owner — semua dalam satu aplikasi.",
+        },
+        sortOrder: 1,
+      },
+      {
+        sectionKey: "features",
+        content: {
+          heading: "Nilai Unggulan Ordria untuk Operasional Kafe",
+          items: [
+            { icon: "qr_code_2", title: "Zero App Download", desc: "Pelanggan scan QR di meja dan langsung memesan dari browser HP — tanpa install aplikasi apa pun.", tag: "Fast Checkout" },
+            { icon: "bolt", title: "Feed Order Real-time", desc: "Pesanan self-order masuk ke layar kasir/barista seketika, lengkap dengan notifikasi suara dan update status live ke pelanggan.", tag: "Auto Sync Data" },
+            { icon: "inventory_2", title: "Manajemen Bahan & Stok", desc: "Catat penerimaan dan penyesuaian stok dengan alasan wajib — seluruh pergerakan tersimpan sebagai riwayat.", tag: "Stock Opname" },
+            { icon: "monitoring", title: "Analitik Owner", desc: "Pantau omset, Self Order vs Manual, dan performa item per menu/kategori/varian — bisa diekspor ke CSV.", tag: "Owner Analytics" },
+          ],
+        },
+        sortOrder: 2,
+      },
+      {
+        sectionKey: "faq",
+        content: {
+          heading: "Pertanyaan yang Sering Diajukan",
+          subtitle: "Semua yang perlu Anda ketahui mengenai implementasi Ordria di kafe Anda.",
+          items: [
+            { q: "Apakah pelanggan harus download aplikasi untuk Self-Ordering?", a: "Tidak. Pelanggan cukup mengarahkan kamera HP ke QR di meja — halaman menu langsung terbuka di browser dan bisa memilih varian hingga membayar via QRIS atau tunai di kasir." },
+            { q: "Bagaimana jika koneksi internet di kafe tiba-tiba terputus?", a: "Frontoffice tetap bisa mencatat transaksi tunai dan pergerakan stok sebagai data pending, lalu tersinkron otomatis saat koneksi kembali. Pembayaran non-tunai membutuhkan koneksi untuk verifikasi." },
+            { q: "Apa saja yang bisa dikelola owner dari BackOffice?", a: "Katalog menu beserta varian dan add-ons, kategori, meja beserta QR-nya, akun staff, pengaturan pajak & service charge, metode pembayaran, tema self-order, serta laporan omset dan performa item." },
+            { q: "Apakah saya bisa upgrade atau downgrade paket sewaktu-waktu?", a: "Bisa. Hubungi tim sales — perubahan paket langsung memengaruhi akses fitur, sedangkan seluruh data historis tetap tersimpan." },
+          ],
+        },
+        sortOrder: 3,
+      },
+      {
+        sectionKey: "cta",
+        content: {
+          badge: "Onboarding Terpandu",
+          title: "Siap Tingkatkan Efisiensi & Omset Kafe Anda Hari Ini?",
+          subtitle:
+            "Diskusikan kebutuhan kafe Anda bersama tim sales Ordria — dari pilihan paket, jadwal live demo, hingga rencana implementasi di outlet Anda.",
+          note: "✓ Setup dibantu tim spesialis • Data isolasi aman tingkat multi-tenant • Support responsif",
+        },
+        sortOrder: 4,
+      },
+      {
+        sectionKey: "contact",
+        content: { whatsapp: "6281234567890", hours: "Online Senin – Minggu (08.00 – 21.00 WIB)" },
+        sortOrder: 5,
+      },
+      {
+        sectionKey: "services",
+        content: {
+          badge: "Jasa Website Ordria",
+          heading: "Website Profesional untuk Bisnis Anda",
+          subtitle:
+            "Dari company profile hingga web app custom — dirancang rapi, cepat, dan siap mengembangkan bisnis. Tanpa harga paket, semua via konsultasi gratis.",
+          items: [
+            { icon: "business", title: "Company Profile", desc: "Website profil perusahaan yang rapi dan meyakinkan di semua perangkat.", tag: "Profil Bisnis" },
+            { icon: "ads_click", title: "Landing Page", desc: "Halaman fokus konversi untuk kampanye dan promosi — cepat dimuat.", tag: "Konversi" },
+            { icon: "shopping_bag", title: "Katalog & E-Commerce", desc: "Jual produk online dengan katalog mudah dikelola dan pembayaran digital.", tag: "Online Shop" },
+            { icon: "code", title: "Custom Web App", desc: "Dashboard, sistem internal, dan integrasi API sesuai kebutuhan spesifik.", tag: "Custom" },
+          ],
+          steps: [
+            { title: "Konsultasi Gratis", desc: "Petakan scope, timeline, dan estimasi biaya secara transparan." },
+            { title: "Desain", desc: "Rancangan direview dan direvisi bersama hingga disetujui." },
+            { title: "Development", desc: "Dibangun responsif, cepat, dan SEO-ready." },
+            { title: "Deploy & Maintenance", desc: "Diluncurkan ke domain Anda, plus opsi maintenance lanjutan." },
+          ],
+        },
+        sortOrder: 6,
+      },
+      {
+        sectionKey: "home",
+        content: {
+          badge: "SaaS POS Kafe & Jasa Pembuatan Website",
+          title: "Dua Solusi Digital untuk Bisnis Anda.",
+          subtitle:
+            "Ordria menghadirkan sistem kasir self-order untuk coffee shop modern dan jasa pembuatan website profesional — pilih yang sesuai kebutuhan Anda.",
+          products: [
+            { icon: "point_of_sale", title: "Ordria POS — SaaS Kafe", desc: "Kasir, self-order QR meja, manajemen stok, dan analitik owner dalam satu aplikasi berlangganan.", ctaLabel: "Lihat Paket POS", href: "/pos-kafe" },
+            { icon: "language", title: "Jasa Website Ordria", desc: "Company profile, landing page, e-commerce, hingga web app custom — via konsultasi gratis.", ctaLabel: "Jelajahi Jasa Website", href: "/jasa-website" },
+          ],
+          cta: { title: "Belum yakin pilih yang mana?", subtitle: "Ceritakan kebutuhan Anda — tim kami akan mengarahkan ke solusi yang paling pas." },
+          faqs: [
+            { q: "Apa itu Ordria?", a: "Ordria menghadirkan dua solusi digital: Ordria POS, aplikasi kasir & self-order berlangganan untuk coffee shop, dan Jasa Website Ordria, layanan pembuatan website profesional untuk berbagai bisnis." },
+            { q: "Apa bedanya Ordria POS dan Jasa Website?", a: "Ordria POS adalah produk SaaS siap pakai dengan paket bulanan — daftar, aktivasi, langsung jalan. Jasa Website adalah layanan custom: setiap website dirancang dan dibangun sesuai kebutuhan spesifik bisnis Anda lewat konsultasi gratis." },
+            { q: "Bagaimana cara memulai?", a: "Untuk Ordria POS, lihat halaman paket lalu hubungi sales untuk aktivasi. Untuk jasa website, buka halaman Jasa Website Ordria lalu kirim kebutuhan Anda lewat formulir konsultasi — gratis tanpa komitmen." },
+            { q: "Bagaimana pembayaran dan dukungannya?", a: "Langganan POS mendukung QRIS, transfer bank, dan tunai dengan invoice bulanan. Jasa website memakai penawaran per proyek. Keduanya didukung tim support yang bisa dihubungi via WhatsApp dan email." },
+          ],
+        },
+        sortOrder: 0,
+      },
+    ],
+  });
+
+  console.log("----------------------------------------------------");
+  console.log("Login platform (POST /api/platform/auth/login):");
+  console.log("  Superadmin -> admin@ordria.id / Admin123!");
+  console.log("  Support    -> support@ordria.id / Support123!");
   console.log("----------------------------------------------------");
 }
 
