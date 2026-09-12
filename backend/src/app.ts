@@ -50,6 +50,14 @@ export function createApp() {
   // Default Express 100kb menolaknya dengan PayloadTooLargeError.
   app.use(express.json({ limit: "5mb" }));
 
+  app.get("/", (_req, res) => {
+    res.json({
+      status: "ok",
+      message: "Ordria Backend API Service Running",
+      documentation: "/api",
+    });
+  });
+
   app.get("/health", (_req, res) => {
     res.json({
       status: "ok",
