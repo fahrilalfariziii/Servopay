@@ -7,6 +7,10 @@
     "backend",
     "apps/*"
   ],
+  "dependencies": {
+  "express": "^4.19.2",
+  "cors": "^2.8.5"
+  },
   "scripts": {
     "dev:backend": "npm run dev --workspace=servopay-backend",
     "dev:webapp": "npm run dev --workspace=web-app",
