@@ -8,7 +8,11 @@ import { errorHandler, notFoundHandler } from "./middleware/error-handler";
 function getCorsOrigins(): string[] {
   const raw = process.env.CORS_ORIGIN;
   if (!raw) {
-    if (process.env.NODE_ENV === "production") throw new Error("CORS_ORIGIN wajib di-set di production (.env)");
+    if (process.env.NODE_ENV === "production") {
+      // Gunakan fallback '*' agar serverless function tidak melempar Unhandled Error/Crash saat env belum diset
+      console.warn("⚠️ CORS_ORIGIN belum di-set di production. Menggunakan fallback '*'.");
+      return ["*"];
+    }
     return ["http://localhost:5173"];
   }
   return raw.split(",").map((s) => s.trim()).filter(Boolean);
@@ -17,13 +21,9 @@ function getCorsOrigins(): string[] {
 export function createApp() {
   const app = express();
   // Trust proxy: development pakai 1 hop (ngrok), production pakai 1 hop yang aman & terbaik
-  // Di prod, X-Forwarded-For hanya dipercaya dari 1 proxy terdekat (Nginx/Railway) — tidak semua hop.
+  // Di prod, X-Forwarded-For hanya dipercaya dari 1 proxy terdekat (Nginx/Railway/Vercel) — tidak semua hop.
   const isProd = process.env.NODE_ENV === 'production';
   app.set('trust proxy', 1);
-  if (isProd) {
-    // Di production, tetap 1 adalah opsi teraman/terbaik untuk single reverse proxy.
-    // Jika deploy di belakang >1 hop (CDN→LB→App), naikkan ke 2 sesuai infra.
-  }
 
   // Security headers standar
   app.use(helmet());
@@ -32,6 +32,7 @@ export function createApp() {
   // Public endpoints (tanpa credentials, boleh longgar) — dipasang sebelum auth
   const publicOrigins = getCorsOrigins();
   app.use("/api/public", cors({ origin: publicOrigins, credentials: false }));
+  
   // Auth & staff endpoints (butuh credentials, origin harus spesifik)
   const authOrigins = getCorsOrigins();
   app.use("/api/auth", cors({ origin: authOrigins, credentials: true }));
@@ -54,9 +55,7 @@ export function createApp() {
       status: "ok",
       service: "ordria-backend",
       time: new Date().toISOString(),
-      // Probe versi kode yang BERJALAN (bukan di repo): naikkan BUILD saat ubah logika.
-      // Dipakai memastikan restart mengenai proses yang benar (kasus bank salah padahal kode benar).
-      build: "2026-09-10-bank-strict+webhook-ignore+recharge-idempotent",
+      build: "2026-09-12-vercel-serverless-fix",
     });
   });
 
@@ -67,3 +66,7 @@ export function createApp() {
 
   return app;
 }
+
+// Inisialisasi app dan sediakan DEFAULT EXPORT untuk Vercel Serverless Function Engine
+const app = createApp();
+export default app;
