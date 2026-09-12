@@ -4,7 +4,7 @@ Web App Coffee Shop Management — tiga area: **Self-Order pelanggan (mobile)**,
 **Frontoffice kasir/barista (desktop)**, **BackOffice owner (desktop)**.
 
 > **Terintegrasi backend** (`CafeProvider` di `src/mock/store.tsx` BE-first via `src/lib/api.ts`
-> + realtime `src/lib/socket.ts`). Seed `src/mock/data.ts` hanya fallback saat server tak terjangkau
+> + realtime SSE `src/lib/stream.ts`). Seed `src/mock/data.ts` hanya fallback saat server tak terjangkau
 > (dengan banner "Mode lokal"); **login wajib server hidup** (fallback mock dihapus).
 
 ## Login
@@ -116,7 +116,7 @@ apps/web-app/
     │   └── store.tsx               # CafeProvider + useCafe() + helper storage sesi
     ├── lib/
     │   ├── api.ts                  # REST client (Bearer+cookie, refresh, error jujur)
-    │   ├── socket.ts               # join qrToken/token + event realtime
+    │   ├── stream.ts               # SSE: subscribe ?token/?qrToken + 7 tipe event realtime
     │   ├── sound.ts                # beep Web Audio (order ±3,5 dtk, simpan ±1 dtk) + notif browser
     │   └── printer.ts              # ESC/POS 58mm + Web Bluetooth/USB real (LAN simulasi)
     ├── shared/                     # dipakai ketiga area

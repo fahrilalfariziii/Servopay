@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useCafe } from '../../../mock/store'
 import { Button, Field, TextInput } from '../../../shared/components/ui'
 import { formatRupiah } from '../../../shared/lib/format'
-import { joinSocket } from '../../../lib/socket'
+import { subscribeStream } from '../../../lib/stream'
 import {
   buildTestPatternBytes,
   connectBluetoothPrinter,
@@ -68,12 +68,8 @@ export function PosSettingsPage() {
     let cleanup: (() => void) | undefined
     try {
       const token = localStorage.getItem('servopay_token') || undefined
-      const s = joinSocket({ token } as unknown as { token?: string })
       const handler = () => refreshBusinessFromBackend().catch(() => {})
-      s.on('business:cash_updated', handler)
-      cleanup = () => {
-        s.off('business:cash_updated', handler)
-      }
+      cleanup = subscribeStream({ token, handlers: { 'business:cash_updated': handler } })
     } catch {}
     return () => {
       cancelled = true

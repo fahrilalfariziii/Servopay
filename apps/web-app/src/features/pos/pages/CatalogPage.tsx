@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useCafe } from '../../../mock/store'
 import type { Ingredient, Product } from '../../../shared/types'
-import { joinSocket } from '../../../lib/socket'
+import { subscribeStream } from '../../../lib/stream'
 
 // Tahap 1 (tanpa tabel BOM): kaitkan menu↔bahan via kecocokan kata nama.
 // Bukan kebenaran mutlak — hanya peringatan. Tahap 2 memakai tabel
@@ -76,17 +76,14 @@ export function CatalogPage() {
     let cleanup: (() => void) | undefined
     try {
       const token = localStorage.getItem('servopay_token') || undefined
-      const s = joinSocket({ token } as unknown as { token?: string })
       const handler = () => refreshProductsFromBackend().catch(() => {})
       const stockHandler = () => refreshIngredientsFromBackend().catch(() => {})
-      s.on('product:availability_updated', handler)
-      s.on('ingredient:stock_updated', stockHandler)
-      cleanup = () => {
-        s.off('product:availability_updated', handler)
-        s.off('ingredient:stock_updated', stockHandler)
-      }
+      cleanup = subscribeStream({
+        token,
+        handlers: { 'product:availability_updated': handler, 'ingredient:stock_updated': stockHandler },
+      })
     } catch {
-      // socket opsional — polling BE via refresh sudah cukup
+      // stream opsional — polling BE via refresh sudah cukup
     }
     return () => {
       cancelled = true

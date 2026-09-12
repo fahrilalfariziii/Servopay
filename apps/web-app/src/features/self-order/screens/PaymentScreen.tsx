@@ -5,7 +5,7 @@ import { formatRupiah } from '../../../shared/lib/format'
 import { Button } from '../../../shared/components/ui'
 import { IconBack } from '../../../shared/components/icons'
 import { useCafe } from '../../../mock/store'
-import { joinSocket } from '../../../lib/socket'
+import { subscribeStream } from '../../../lib/stream'
 
 interface Props {
   order: Order & { payments?: Array<{ gatewayData?: { qrUrl?: string; vaNumber?: string; vaBank?: string; billerCode?: string; redirectUrl?: string; qrString?: string } }> }
@@ -139,24 +139,22 @@ export function PaymentScreen({ order, onBack, onConfirm, onRetry }: Props) {
     }
     // Start poll after 3s
     timer = window.setTimeout(poll, 3000)
-    // Socket for realtime settlement
+    // SSE untuk settlement realtime
+    let cleanup: (() => void) | undefined
     try {
-      const s = joinSocket({ qrToken: (liveOrder as unknown as { qrToken?: string }).qrToken as string | undefined })
       const handler = (payload: unknown) => {
         const p = payload as { clientOrderId?: string; paymentStatus?: string }
         if (p?.clientOrderId === liveOrder.clientOrderId && p?.paymentStatus === 'paid') onConfirm()
       }
-      s.on('order:payment_updated', handler)
-      return () => {
-        cancelled = true
-        if (timer) window.clearTimeout(timer)
-        s.off('order:payment_updated', handler)
-      }
-    } catch {
-      return () => {
-        cancelled = true
-        if (timer) window.clearTimeout(timer)
-      }
+      cleanup = subscribeStream({
+        qrToken: (liveOrder as unknown as { qrToken?: string }).qrToken as string | undefined,
+        handlers: { 'order:payment_updated': handler },
+      })
+    } catch {}
+    return () => {
+      cancelled = true
+      if (timer) window.clearTimeout(timer)
+      if (cleanup) cleanup()
     }
   }, [liveOrder.clientOrderId, refreshOrderFromBackend, onConfirm, liveOrder])
 

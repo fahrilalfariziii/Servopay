@@ -5,7 +5,7 @@ import { AppError } from "../lib/errors";
 import { asyncHandler } from "../middleware/error-handler";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { FEATURES, requireFeature } from "../lib/feature-gate";
-import { emitStockUpdate } from "../lib/socket";
+import { emitStockUpdate } from "../lib/realtime";
 
 export const ingredientsRouter = Router();
 ingredientsRouter.use(requireAuth);

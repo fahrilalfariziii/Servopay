@@ -30,12 +30,12 @@ servopay/
 - **Backend berdiri sendiri** — semua endpoint bisa dites langsung via curl/Postman tanpa frontend
   (lihat `backend/README.md` §3: health, auth, self-order publik, plans/leads publik, orders, business, staff, tables,
   products, ingredients, analytics, printer, webhook Midtrans).
-- **Web-app terintegrasi BE** — halaman kasir & owner memuat/menyimpan via REST + realtime Socket.io.
+- **Web-app terintegrasi BE** — halaman kasir & owner memuat/menyimpan via REST + realtime SSE.
   Fallback lokal (seed `apps/web-app/src/mock/data.ts`) hanya dipakai saat server tak terjangkau, dengan
   banner "Mode lokal" yang eksplisit; login fallback mock sudah dihapus (login wajib server hidup).
   Seed data disamakan dua sisi (`backend/prisma/seed.ts` ↔ `apps/web-app/src/mock/data.ts`:
   bisnis Bean & Brew, staff Owner123!/Kasir123!/Barista123!, menu, meja `table-01..06`).
-- Sorotan Fase 2: JWT httpOnly-cookie + Bearer (silent refresh), Socket.io per-room bisnis,
+- Sorotan Fase 2: JWT httpOnly-cookie + Bearer (silent refresh), SSE per-bisnis,
   Midtrans 4 metode (cash/qris/ewallet/bank_transfer) + ID unik per charge + recharge,
   manual order record-only + tendered/kembalian, inventory 2 tab (Receive/Adjustment + procurement),
   shift kas (opening/expected/closing/selisih), printer ESC/POS Bluetooth/USB real (LAN simulasi),

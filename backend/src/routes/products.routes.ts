@@ -4,7 +4,7 @@ import { prisma } from "../lib/prisma";
 import { AppError } from "../lib/errors";
 import { asyncHandler } from "../middleware/error-handler";
 import { requireAuth, requireRole } from "../middleware/auth";
-import { emitBusinessUpdated, emitProductAvailabilityUpdate } from "../lib/socket";
+import { emitBusinessUpdated, emitProductAvailabilityUpdate } from "../lib/realtime";
 
 export const productsRouter = Router();
 productsRouter.use(requireAuth);

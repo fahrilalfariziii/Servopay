@@ -19,6 +19,7 @@ import { PaymentScreen } from './screens/PaymentScreen'
 import { StatusScreen } from './screens/StatusScreen'
 import { ItemSheet } from './components/ItemSheet'
 import { BottomNav } from './components/BottomNav'
+import { subscribeStream } from '../../lib/stream'
 
 type Screen = 'menu' | 'cart' | 'payment' | 'status' | 'history'
 
@@ -74,24 +75,22 @@ export function SelfOrderApp() {
       }).catch(() => {})
     }
     iv = window.setTimeout(() => { poll(); iv = window.setInterval(poll, 12000) as unknown as number }, 5000) as unknown as number
-    // Socket join via qrToken (sama seperti OrdersPage join)
+    // Realtime katalog via SSE (sama seperti OrdersPage join)
     let cleanup: (() => void) | undefined
-    import("../../lib/socket").then(({ joinSocket }) => {
-      try {
-        const s = joinSocket({ qrToken: token })
-        const handler = () => {
-          fetchCatalogFromBackend(token).then((info) => {
-            if (info) {
-              setServerTable(info)
-              setTableInvalid(false)
-            }
-          }).catch(() => {})
-        }
-        s.on('product:availability_updated', handler)
-        s.on('business:updated', handler)
-        cleanup = () => { s.off('product:availability_updated', handler); s.off('business:updated', handler) }
-      } catch {}
-    })
+    try {
+      const handler = () => {
+        fetchCatalogFromBackend(token).then((info) => {
+          if (info) {
+            setServerTable(info)
+            setTableInvalid(false)
+          }
+        }).catch(() => {})
+      }
+      cleanup = subscribeStream({
+        qrToken: token,
+        handlers: { 'product:availability_updated': handler, 'business:updated': handler },
+      })
+    } catch {}
     return () => { if (iv) window.clearInterval(iv); if (cleanup) cleanup() }
   }, [token, fetchCatalogFromBackend])
   // Fallback ke meja 04 hanya jika token tidak ada (mis. akses langsung /order tanpa token).
@@ -241,20 +240,18 @@ export function SelfOrderApp() {
     }
     iv = window.setTimeout(poll, 3000) as unknown as number
     let cleanup: (() => void) | undefined
-    import("../../lib/socket").then(({ joinSocket }) => {
-      try {
-        const s = joinSocket({ qrToken: token })
-        const handler = (payload: unknown) => {
-          const p = payload as { id?: number | string; clientOrderId?: string; status?: string }
-          if (!p) return
-          const match = orders.find((o) => o.clientOrderId === p.clientOrderId || String(p.id) === o.id)
-          if (match) refreshOrderFromBackend(match.clientOrderId).catch(() => {})
-        }
-        s.on('order:status_updated', handler)
-        s.on('order:payment_updated', handler)
-        cleanup = () => { s.off('order:status_updated', handler); s.off('order:payment_updated', handler) }
-      } catch {}
-    })
+    try {
+      const handler = (payload: unknown) => {
+        const p = payload as { id?: number | string; clientOrderId?: string; status?: string }
+        if (!p) return
+        const match = orders.find((o) => o.clientOrderId === p.clientOrderId || String(p.id) === o.id)
+        if (match) refreshOrderFromBackend(match.clientOrderId).catch(() => {})
+      }
+      cleanup = subscribeStream({
+        qrToken: token,
+        handlers: { 'order:status_updated': handler, 'order:payment_updated': handler },
+      })
+    } catch {}
     return () => { cancelled = true; if (iv) window.clearInterval(iv); if (cleanup) cleanup() }
   }, [activeOrder?.id, activeOrder?.clientOrderId, token, refreshOrderFromBackend])
 

@@ -4,7 +4,7 @@ import { uid } from '../../../shared/lib/format'
 import type { Ingredient } from '../../../shared/types'
 import { ADJUSTMENT_REASONS } from '../../../shared/types'
 import { Button, Field, TextInput } from '../../../shared/components/ui'
-import { joinSocket } from '../../../lib/socket'
+import { subscribeStream } from '../../../lib/stream'
 
 type InventoryTab = 'receive' | 'adjust'
 
@@ -35,15 +35,11 @@ export function InventoryPage() {
     let cleanup: (() => void) | undefined
     try {
       const token = localStorage.getItem('servopay_token') || undefined
-      const s = joinSocket({ token } as unknown as { token?: string })
       const handler = () => {
         refreshIngredientsFromBackend().catch(() => {})
         refreshMovementsFromBackend().catch(() => {})
       }
-      s.on('ingredient:stock_updated', handler)
-      cleanup = () => {
-        s.off('ingredient:stock_updated', handler)
-      }
+      cleanup = subscribeStream({ token, handlers: { 'ingredient:stock_updated': handler } })
     } catch {}
     return () => {
       cancelled = true

@@ -6,7 +6,7 @@ import { asyncHandler } from "../middleware/error-handler";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { FEATURES, getBusinessFeatures } from "../lib/feature-gate";
 import { encrypt, isEncrypted } from "../lib/encryption";
-import { emitBusinessCashUpdate, emitBusinessUpdated } from "../lib/socket";
+import { emitBusinessCashUpdate, emitBusinessUpdated } from "../lib/realtime";
 
 export const businessRouter = Router();
 businessRouter.use(requireAuth);

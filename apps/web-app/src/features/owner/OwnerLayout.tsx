@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Outlet } from 'react-router-dom'
 import { useCafe } from '../../mock/store'
 import { OwnerSidebar } from './components/OwnerSidebar'
-import { joinSocket } from '../../lib/socket'
+import { subscribeStream } from '../../lib/stream'
 
 export function OwnerLayout() {
   const {
@@ -34,7 +34,6 @@ export function OwnerLayout() {
     let cleanup: (() => void) | undefined
     try {
       const token = localStorage.getItem('servopay_token') || undefined
-      const s = joinSocket({ token } as unknown as { token?: string })
       const refreshOrders = () => refreshOrdersFromBackend().catch(() => {})
       const refreshProducts = () => {
         refreshProductsFromBackend().catch(() => {})
@@ -42,22 +41,18 @@ export function OwnerLayout() {
       }
       const refreshStock = () => refreshIngredientsFromBackend().catch(() => {})
       const refreshBiz = () => refreshBusinessFromBackend().catch(() => {})
-      s.on('order:new', refreshOrders)
-      s.on('order:status_updated', refreshOrders)
-      s.on('order:payment_updated', refreshOrders)
-      s.on('product:availability_updated', refreshProducts)
-      s.on('ingredient:stock_updated', refreshStock)
-      s.on('business:cash_updated', refreshBiz)
-      s.on('business:updated', refreshBiz)
-      cleanup = () => {
-        s.off('order:new', refreshOrders)
-        s.off('order:status_updated', refreshOrders)
-        s.off('order:payment_updated', refreshOrders)
-        s.off('product:availability_updated', refreshProducts)
-        s.off('ingredient:stock_updated', refreshStock)
-        s.off('business:cash_updated', refreshBiz)
-        s.off('business:updated', refreshBiz)
-      }
+      cleanup = subscribeStream({
+        token,
+        handlers: {
+          'order:new': refreshOrders,
+          'order:status_updated': refreshOrders,
+          'order:payment_updated': refreshOrders,
+          'product:availability_updated': refreshProducts,
+          'ingredient:stock_updated': refreshStock,
+          'business:cash_updated': refreshBiz,
+          'business:updated': refreshBiz,
+        },
+      })
     } catch {}
     return () => {
       cancelled = true

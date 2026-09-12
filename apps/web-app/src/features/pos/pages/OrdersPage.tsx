@@ -4,7 +4,7 @@ import { formatRupiah, formatTime } from '../../../shared/lib/format'
 import type { Order, OrderStatus } from '../../../shared/types'
 import { ReceiptModal } from '../components/ReceiptModal'
 import { api } from '../../../lib/api'
-import { joinSocket } from '../../../lib/socket'
+import { subscribeStream } from '../../../lib/stream'
 import { notifyBrowserNewOrder, playNewOrderBeep, unlockAudioOnGesture } from '../../../lib/sound'
 
 // Tab Kategori Pesanan Aktif
@@ -60,9 +60,9 @@ export function OrdersPage() {
     unlockAudioOnGesture()
     refreshOrdersFromBackend().catch(() => {})
     const iv = window.setInterval(() => refreshOrdersFromBackend().catch(() => {}), 8000)
-    // Socket realtime
+    // SSE realtime
+    let cleanup: (() => void) | undefined
     try {
-      const s = joinSocket({ token: localStorage.getItem('servopay_token') || undefined } as unknown as { token?: string })
       const onNew = (payload: unknown) => {
         refreshOrdersFromBackend().catch(() => {})
         const p = payload as {
@@ -87,13 +87,12 @@ export function OrdersPage() {
         )
       }
       const onUpd = () => refreshOrdersFromBackend().catch(() => {})
-      s.on('order:new', onNew)
-      s.on('order:status_updated', onUpd)
-      s.on('order:payment_updated', onUpd)
-      return () => { window.clearInterval(iv); s.off('order:new', onNew); s.off('order:status_updated', onUpd); s.off('order:payment_updated', onUpd) }
-    } catch {
-      return () => { window.clearInterval(iv) }
-    }
+      cleanup = subscribeStream({
+        token: localStorage.getItem('servopay_token') || undefined,
+        handlers: { 'order:new': onNew, 'order:status_updated': onUpd, 'order:payment_updated': onUpd },
+      })
+    } catch {}
+    return () => { window.clearInterval(iv); if (cleanup) cleanup() }
   }, [business.id, refreshOrdersFromBackend])
 
   const handleStatus = async (order: Order, status: OrderStatus) => {

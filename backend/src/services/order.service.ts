@@ -7,7 +7,7 @@ import {
   emitNewOrder,
   emitOrderStatusUpdate,
   emitOrderPaymentUpdate,
-} from "../lib/socket";
+} from "../lib/realtime";
 
 export interface CreateOrderItemInput {
   productId: number;

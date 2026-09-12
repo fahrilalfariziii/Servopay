@@ -4,7 +4,7 @@ Backend REST API + Realtime untuk aplikasi Coffee Shop Management (Self-Order, F
 BackOffice/Owner), dibangun sesuai skema & aturan bisnis di `../docs/prd_POS_updated.md`.
 
 Project ini **berdiri sendiri** — semua endpoint bisa dites langsung lewat curl/Postman/Insomnia —
-**dan** sudah dipakai `../apps/web-app` (REST + Socket.io). Alur §3 di bawah tetap valid sebagai dokumentasi API.
+**dan** sudah dipakai `../apps/web-app` (REST + SSE). Alur §3 di bawah tetap valid sebagai dokumentasi API.
 
 ## Stack
 
@@ -12,7 +12,7 @@ Project ini **berdiri sendiri** — semua endpoint bisa dites langsung lewat cur
 - **PostgreSQL** (lewat Docker Compose untuk development)
 - **Prisma ORM** — schema & migrasi type-safe, gampang dipindah ke Postgres managed apa pun nanti
 - **JWT + bcrypt** — autentikasi & hashing password sendiri (tidak bergantung ke Supabase Auth)
-- **Socket.io** — realtime order baru & perubahan status (per-room `business:<id>`)
+- **SSE (Server-Sent Events)** — realtime order baru & perubahan status (per-bisnis, HTTP murni tanpa WebSocket)
 - **Zod + helmet + rate-limit + cookie-parser** — validasi input, security headers, anti brute-force/flood, httpOnly cookie
 - Body JSON limit **5mb** (logo/foto dataURL dari frontend)
 
@@ -123,7 +123,7 @@ curl -s -X POST http://localhost:4000/api/public/orders \
   }'
 # -> payments[0].gateway = "midtrans", gatewayData.qrUrl = URL QR PNG Midtrans
 
-# 5. Polling status order (fallback selain socket)
+# 5. Polling status order (fallback selain SSE)
 curl -s http://localhost:4000/api/public/orders/<clientOrderId-dari-response-checkout>
 
 # 6. Polling status Midtrans + auto-sync paid (fallback webhook, tanpa perlu ngrok)
@@ -143,7 +143,7 @@ curl -s -X POST http://localhost:4000/api/public/orders/by-client/<clientOrderId
 # Set di .env: MIDTRANS_NOTIFICATION_URL=https://<xxx>.ngrok-free.app/api/public/midtrans/notification
 # Midtrans akan POST ke sini saat status berubah (pending/settlement/expire).
 # Verifikasi signature SHA512(order_id+status_code+gross_amount+ServerKey) otomatis;
-# settlement -> order paid + emit socket order:payment_updated.
+# settlement -> order paid + emit SSE order:payment_updated.
 # Lookup 2 lapis: cocok orderNumber persis, lalu payments.gatewayData.orderId (ID unik per charge).
 curl -s http://localhost:4000/api/public/orders/by-client/<clientOrderId>/status
 ```
@@ -245,11 +245,13 @@ curl -s "http://localhost:4000/api/analytics/dashboard?period=daily" -H "Authori
 curl -s "http://localhost:4000/api/analytics/sales?period=weekly" -H "Authorization: Bearer $TOKEN"
 ```
 
-**Realtime (Socket.io):** pelanggan join via `emit("join", { qrToken: "<qr-meja>" })`
-(businessId di-resolve server, bukan dipercaya dari client); staff join via `{ token: JWT }`.
+**Realtime (SSE):** pelanggan subscribe via `GET /api/public/stream?qrToken=<qr-meja>`
+(businessId di-resolve server, bukan dipercaya dari client); staff via `?token=JWT`.
 Dengarkan event `order:new`, `order:status_updated`, `order:payment_updated`,
 `product:availability_updated` (CRUD produk/kategori/opsi juga emit ini),
 `ingredient:stock_updated`, `business:cash_updated`, `business:updated`.
+Reconnect otomatis via EventSource + replay `Last-Event-ID`; set `REDIS_URL`
+(Upstash) untuk fan-out lintas instance, tanpa itu mode in-process.
 
 ## 4. Struktur folder
 
@@ -259,9 +261,9 @@ backend/
 │   ├── schema.prisma      # 12 tabel sesuai ERD di PRD §6
 │   └── seed.ts            # data contoh (samakan dengan apps/web-app/src/mock/data.ts)
 └── src/
-    ├── index.ts           # bootstrap: http server + socket.io + listen
+    ├── index.ts           # bootstrap: http server + initRealtime + listen
     ├── app.ts             # express app, middleware, mount /api
-    ├── lib/               # prisma client, jwt, password, kalkulasi order, socket
+    ├── lib/               # prisma client, jwt, password, kalkulasi order, realtime (SSE)
     ├── middleware/         # auth (JWT + role guard), error handler
     ├── services/           # logika inti: create order, ubah status, catat pembayaran
     └── routes/             # 1 file per resource (REST endpoints)
@@ -430,7 +432,7 @@ di semua endpoint operasional.
 - **Validasi toleran**: angka (`price`, `quantity`, `minimumStock`, …) memakai `z.coerce` (terima `"5"` maupun `5`); string opsional memakai `nullish→undefined` (`null` = tidak diubah, bukan 400).
 - **Manual record-only**: `POST /api/orders` dengan `recordOnly:true` melewati Midtrans untuk semua metode; `tendered`/`change` tersimpan di `payments.gatewayData`.
 - **business_id di semua tabel operasional** — fondasi SaaS-ready sesuai PRD, walau saat ini baru dipakai untuk 1 bisnis.
-- **Realtime** order baru & perubahan status langsung di-broadcast lewat Socket.io per-room bisnis.
+- **Realtime** order baru & perubahan status langsung di-broadcast via SSE per bisnis.
 
 ## 7. Midtrans (sudah terintegrasi, bukan roadmap)
 
@@ -479,3 +481,27 @@ Database dev memakai Docker volume (`backend_servopay_db_data`). Berlaku:
 4. Ganti `JWT_SECRET` dengan string acak panjang yang benar-benar rahasia.
 5. Set `CORS_ORIGIN` ke domain frontend production.
 6. Ganti `MIDTRANS_IS_PRODUCTION=true` + ServerKey production + `MIDTRANS_NOTIFICATION_URL` domain publik.
+
+## 10. Deploy ke Vercel (full-Vercel, gratis tanpa kartu)
+
+Backend jalan sebagai Vercel Functions via `api/index.ts` (me-reuse `createApp()` dari
+`src/app.ts`); `src/index.ts` (long-running, untuk Hostinger/VPS/Docker) TIDAK diubah.
+Realtime SSE = HTTP biasa sehingga lolos batasan WebSocket serverless; stream diputus
+tiap ≤5 menit (limit Hobby) dan client reconnect otomatis + replay `Last-Event-ID`.
+
+1. Buat 4 project Vercel dari repo yang sama: 3 frontend (`apps/*/`, `vercel.json` SPA
+   fallback sudah ada) + 1 backend (**Root Directory `backend/`**).
+2. Backend memakai `backend/vercel.json` (semua path → `/api/index`, `maxDuration: 300)
+   dan `postinstall: prisma generate` (sudah di `package.json`).
+3. Buat database Neon (free, tanpa kartu) lalu dari lokal:
+   `DATABASE_URL="<neon-pooled>" npx prisma migrate deploy` + `npm run seed`.
+4. Buat Redis Upstash free (tanpa kartu) untuk fan-out SSE lintas instance; tanpa
+   `REDIS_URL` realtime hanya jalan bila request & stream satu instance.
+5. Env backend di Vercel: `DATABASE_URL` (Neon pooled), `JWT_SECRET`, `CORS_ORIGIN`
+   (3 URL frontend), `FRONTEND_URL`, `MIDTRANS_*` (sandbox dulu), `REDIS_URL`,
+   SMTP opsional.
+6. Env tiap frontend: `VITE_API_BASE_URL` (URL backend Vercel); landing tambah
+   `VITE_WEB_APP_URL` + `VITE_SALES_WHATSAPP`; web-app `VITE_PUBLIC_BASE_URL`
+   (wajib URL publik web-app agar QR tidak menunjuk localhost).
+7. Verifikasi: `/health` → login → order self-order muncul realtime di 2 tab →
+   potong stream dan pastikan tidak ada event hilang → checkout QRIS sandbox sampai paid.

@@ -10,7 +10,8 @@ import { asyncHandler } from "../middleware/error-handler";
 import { createOrder } from "../services/order.service";
 import { buildMidtransItemDetails, createMidtransChargeForMethod, getMidtransTransactionStatus, midtransOrderIdFromPayments, verifyMidtransSignature } from "../services/midtrans.service";
 import { markOrderPaid, cancelOrder } from "../services/order.service";
-import { emitOrderPaymentUpdate, emitOrderStatusUpdate } from "../lib/socket";
+import { emitOrderPaymentUpdate, emitOrderStatusUpdate } from "../lib/realtime";
+import { handleStream } from "../lib/realtime";
 
 const publicOrderLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -29,6 +30,25 @@ const midtransNotificationLimiter = rateLimit({
 });
 
 export const publicRouter = Router();
+
+// GET /api/stream — realtime Server-Sent Events (pengganti Socket.io).
+// Staff:   /api/stream?token=JWT
+// Pelanggan: /api/stream?qrToken=table-01
+// Resume: header Last-Event-ID (EventSource otomatis). Rate-limit longgar
+// karena reconnect berkala adalah perilaku normal SSE.
+const streamLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Terlalu banyak koneksi stream, coba lagi sebentar" },
+});
+publicRouter.get("/stream", streamLimiter, (req, res) => {
+  handleStream(req, res).catch((e) => {
+    console.error("[stream] gagal:", e);
+    if (!res.headersSent) res.status(500).json({ error: "Gagal membuka stream" });
+  });
+});
 
 // GET /api/public/tables/:qrToken
 // Dipanggil saat pelanggan scan QR — resolve meja + info bisnis (untuk header & kalkulasi pajak/service di cart).
